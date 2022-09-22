@@ -325,7 +325,7 @@ def main():
 
 if __name__ == "__main__":
     # main()
-    image = io.imread("manualA001.tif")
+    image = io.imread("../TestData/manualA001-15um2.tif")
     myMap = PixelMap(image)
     print(myMap.rows)
     print(myMap.cols)
