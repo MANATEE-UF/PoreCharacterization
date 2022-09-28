@@ -4,6 +4,8 @@ import tensorflow as tf
 import numpy as np
 from skimage import io
 import os
+import matplotlib.pyplot as plt
+import math
 
 # Generates training data set based on images found in a folder
 #
@@ -14,7 +16,7 @@ import os
 #   dataAugments:   (dict)      Various data augmentations that can be performed
 #                   Options include:
 #                       CROP:       (int)       Crops image into n number of random sections
-#                       ROTATION:   (int)       Indicates how many additional rotated image data sets should be generated
+#                       ROTATION:   (boolean)   Creates additional rotated image sets
 #                       FLIP:       (boolean)   Indicates if flipped images should be generated
 # Returns:
 #   dataSet:        (tf.tensor) Data split into batches of time steps
@@ -60,17 +62,87 @@ def GenerateDataSet(imagesDir, numTimeSteps, stepSpacing = 1, dataAugments={}):
         for j in range(stepSpacing):
             startIndex = i * (numTimeSteps * stepSpacing) + j
             stopIndex = (i+1) * (numTimeSteps * stepSpacing)
-            dataSet.append(images[startIndex:stopIndex:stepSpacing])
+            dataSet.append(tf.convert_to_tensor(images[startIndex:stopIndex:stepSpacing]))
 
     # Crop image into quadrants if requested
-    # Currently crops and resizes to original size, may want to change
-    # if dataAugments.has_key("CROP"):
-    #     crop_height = imageHeight
-    #     for batch in dataSet:
-    #         newBatch = 
-            
+    # Crops and resizes to original size
+    # Multiplies data set size by number of crops requested
+    # TODO: Does resizing affect porosity distribution in predictive model??? TBD
+    if "CROP" in dataAugments:
+        print(f"Augmenting {len(dataSet)} batches with CROP")
 
+        # Set minimum crop height size to ensure cropped sections are not too small and lose overall detail
+        # Width set based on ratio of original image
+        widthHeightRatio = imageWidth / imageHeight
+        minCropHeight = int(imageHeight/4)
+        
+        for i in range(len(dataSet)):
+            batch = dataSet[i]
+            print(f"Applying CROP to batch #{i}")
+            for j in range(dataAugments["CROP"]):
+                # Set random seed to apply for entire batch
+                seed = (np.random.randint(1,dataAugments["CROP"]), np.random.randint(dataAugments["CROP"], dataAugments["CROP"]*10))
+
+                # Set random crop size to apply for entire batch
+                cropHeight = np.random.randint(minCropHeight, imageHeight)
+                cropWidth = int(cropHeight * widthHeightRatio)
+                cropSize = (cropHeight, cropWidth, 1)
+
+                newBatch = []
+
+                # Apply crop to all images in batch
+                for image in batch:
+                    newImage = tf.image.stateless_random_crop(image, cropSize, seed=seed)
+                    newImage = tf.image.resize_with_pad(newImage, imageHeight, imageWidth)
+                    newBatch.append(newImage)
+                
+                newBatch = tf.convert_to_tensor(newBatch)
+                dataSet.append(newBatch)
     
+    # Augment with 90 degree rotations
+    # Images rotated 90, 180, and 270 degrees
+    # Multiplies data set size by 4
+    if "ROTATION" in dataAugments and dataAugments["ROTATION"]:
+        print(f"Augmenting {len(dataSet)} batches with ROTATION")
+
+        for i in range(len(dataSet)):
+            print(f"Applying ROTATION to batch #{i}")
+            batch = dataSet[i]
+
+            for j in range(1,4):
+                newBatch = tf.image.rot90(batch, j)
+                newBatch = tf.image.resize_with_pad(newBatch, imageHeight, imageWidth)
+                dataSet.append(newBatch)
+    
+    # Augment with vertical and horizontal flips
+    # Multiplies data set size by 3
+    if "FLIP" in dataAugments and dataAugments["FLIP"]:
+        print(f"Augmenting {len(dataSet)} batches with FLIP")
+
+        for i in range(len(dataSet)):
+            print(f"Applying FLIP to batch #{i}")
+            batch = dataSet[i]
+
+            flipLeftRight = tf.image.flip_left_right(batch)
+            flipUpDown = tf.image.flip_up_down(batch)
+
+            dataSet.append(flipLeftRight)
+            dataSet.append(flipUpDown)
+
+    return dataSet
+
+# Displays first image of each batch
+# Dataset must be comprised of images
+def PreviewDataSet(dataSet, viewTime):
+    for i in range(len(dataSet)):
+        img = dataSet[i][0]
+        img = img.numpy()
+        plt.imshow(img, cmap="gray")
+        plt.title(f"Batch {i}/{len(dataSet)}")
+        plt.show(block=False)
+        plt.pause(viewTime)
+        plt.close("all")
+
 def main():
     trainingData = []
     testingData = []
@@ -107,4 +179,5 @@ def main():
     ])
 if __name__ == "__main__":
     #main()
-    GenerateDataSet("/Users/mitchellmika/Desktop/SEM_DATA", 10, 2)
+    dataSet = GenerateDataSet("/Users/mitchellmika/Desktop/SEM_DATA", 10, 2, {"CROP":2,"ROTATION":True, "FLIP":True})
+    PreviewDataSet(dataSet, 0.3)
