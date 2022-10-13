@@ -325,7 +325,8 @@ def main():
 
 if __name__ == "__main__":
     # main()
-    image = io.imread("../TestData/manualA001-15um2.tif")
+    image = io.imread("ManualCountTool/TestData/manualA001-15um2.tif")
+    plt.imshow(image)
+    plt.show()
     myMap = PixelMap(image)
-    print(myMap.rows)
-    print(myMap.cols)
+    myMap.ShowImage()
