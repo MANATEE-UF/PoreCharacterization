@@ -37,7 +37,9 @@ def GenerateDataSet(    imagesDir,
                         stepSpacing=1, 
                         flatten=False,
                         predictSeq=False, 
-                        dataAugments={}):
+                        dataAugments={},
+                        validationRatio=0.2
+                        ):
     
     numTimeSteps += 1   # Allows for y_train to also be generated, each training set will still only contain
                         #   original numTimeSteps number of steps
@@ -58,7 +60,7 @@ def GenerateDataSet(    imagesDir,
     for i in range(numImages):
         imagePath = imagesDir + "/" + images[i]
         readImage = tf.io.read_file(imagePath)
-        images[i] = tf.cast(tf.io.decode_jpeg(readImage, channels=1), dtype=tf.float32) / 255.0
+        images[i] = tf.cast(tf.io.decode_png(readImage, channels=1), dtype=tf.float32) / 255.0 # Scale to 0-1
 
     # Trim original data set if it doesn't work with numTimeSteps and stepSpacing
     if numImages % numTimeSteps != 0 and numImages % stepSpacing != 0:
@@ -163,14 +165,14 @@ def GenerateDataSet(    imagesDir,
             y_train.append(series[-1])
 
 
-    # TODO: Create x_test and y_test from training data set
-    x_test = []
-    y_test = []
+    # Create x_test and y_test from training data set
+    x_val = []
+    y_val = []
     numSeries = len(x_train)
-    numTestSeries = int(numSeries * .2)
-    for i in range(numTestSeries):
-        x_test.append(x_train.pop(-1))
-        y_test.append(y_train.pop(-1))
+    numValSeries = int(numSeries * validationRatio)
+    for i in range(numValSeries):
+        x_val.append(x_train.pop(-1))
+        y_val.append(y_train.pop(-1))
 
     print()
     x_train = tf.convert_to_tensor(x_train)
@@ -179,13 +181,13 @@ def GenerateDataSet(    imagesDir,
     y_train = tf.convert_to_tensor(y_train)
     print(f"Shape of y_train: {tf.shape(y_train)}")
 
-    x_test = tf.convert_to_tensor(x_test)
-    print(f"Shape of x_test:  {tf.shape(x_test)}")
+    x_val = tf.convert_to_tensor(x_val)
+    print(f"Shape of x_test:  {tf.shape(x_val)}")
 
-    y_test = tf.convert_to_tensor(y_test)
-    print(f"Shape of y_train: {tf.shape(y_test)}")
+    y_val = tf.convert_to_tensor(y_val)
+    print(f"Shape of y_train: {tf.shape(y_val)}")
 
     print()
     time.sleep(3)
 
-    return x_train, y_train, x_test, y_test
+    return x_train, y_train, x_val, y_val

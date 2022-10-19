@@ -6,51 +6,53 @@ import os
 import matplotlib.pyplot as plt
 from Models.CNN_RNN import Create_CNN_RNN, CNN_RNN_Model
 from Models.RNN_OneStep import Create_RNN_OneStep
+from Models.ConvLSTM import CreateConvLSTM
 from Data.GenerateDataSet import GenerateDataSet
-from Data.ImageVisualization import ShowOneStepPrediction, PreviewDataSet, ShowMultipleStepPrediction
+from Data.ImageVisualization import ShowRNNOneStepPrediction, PreviewDataSet, ShowConvLSTMPrediction
 
 
 def main():
-    dataPath = "/Users/mitchellmika/Desktop/Resized_SEM_50"
-    numTimeSteps = 10
-    stepSpacing = 3
+    dataPath = "/Users/mitchellmika/Desktop/Resized_SEM_50_Binary"
+    numTimeSteps = 3
+    stepSpacing = 1
     augmentOptions = {"CROP":0, "ROTATION":True, "FLIP":True}
     imageHeight, imageWidth = GetImageSize(dataPath)
 
-    x_train, y_train, x_test, y_test =  GenerateDataSet(
+    x_train, y_train, x_val, y_val =  GenerateDataSet(
                                             dataPath, 
                                             numTimeSteps=numTimeSteps, 
                                             stepSpacing=stepSpacing, 
                                             flatten=False,
-                                            predictSeq=False, 
-                                            dataAugments=augmentOptions
+                                            predictSeq=True, 
+                                            dataAugments=augmentOptions,
+                                            validationRatio=0.1
                                         )
     #PreviewDataSet(x_train, 0.3)
 
-    #model = Create_RNN_OneStep(imageHeight*imageWidth)
-    model = CNN_RNN_Model(numTimeSteps)
-    model.build(input_shape=(numTimeSteps, imageHeight, imageWidth, 1))
+    # model = Create_RNN_OneStep(imageHeight*imageWidth)
+    # model = CNN_RNN_Model(numTimeSteps)
+    # model.build(input_shape=(numTimeSteps, imageHeight, imageWidth, 1))
+    model = CreateConvLSTM(numTimeSteps, imageHeight, imageWidth)
     print(model.summary())
     
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.01), 
-        loss="mse",
-        metrics=["mae"]
+        optimizer=tf.keras.optimizers.Adam(), 
+        loss=tf.keras.losses.binary_crossentropy # Categorical ce and softmax both produce output of all 1
         )
     
-    callback = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=3)
+    earlyStopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3, min_delta=0.001)
 
     model.fit(
         x_train, 
         y_train, 
-        epochs=30,
-        batch_size=1,
-        callbacks=[callback]
+        epochs=5,
+        batch_size=10,
+        validation_data=(x_val, y_val),
+        callbacks=[earlyStopping]
         )
     
-    model.evaluate(x_test, y_test, batch_size=1)
-    
-    ShowOneStepPrediction(model, x_train[0], y_train[0], numTimeSteps, imageHeight, imageWidth)
+    #ShowRNNOneStepPrediction(model, x_train[0], y_train[0], numTimeSteps, imageHeight, imageWidth)
+    ShowConvLSTMPrediction(model, x_val[0], y_val[0], numTimeSteps, imageHeight, imageWidth)
 
 def GetImageSize(imagesDir):
     images = os.listdir(imagesDir)
@@ -65,3 +67,4 @@ def GetImageSize(imagesDir):
 if __name__ == "__main__":
     main()
     
+# JPG File sequence has weird blur effect, PNG does not have this issue (lossy issues??)

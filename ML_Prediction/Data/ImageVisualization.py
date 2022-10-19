@@ -29,9 +29,9 @@ def PreviewDataSet(dataSet, viewTime):
 
 
 #########################################################################################################
-# ShowOneStepPrediction
+# ShowRNNOneStepPrediction
 #
-# Shows model prediction for one time-step in advance
+# Shows RNN model prediction for one time-step in advance
 #
 # Parameters:
 #   model:          (tf.model)  Trained tensorflow model
@@ -44,7 +44,7 @@ def PreviewDataSet(dataSet, viewTime):
 # Returns:
 #   None
 #########################################################################################################
-def ShowOneStepPrediction(model, x, y_true, numTimeSteps, imageHeight, imageWidth):
+def ShowRNNOneStepPrediction(model, x, y_true, numTimeSteps, imageHeight, imageWidth):
     y = model.predict(tf.reshape(x, (1, numTimeSteps, imageHeight*imageWidth)))
 
     fig, axs = plt.subplots(2,4)
@@ -75,13 +75,14 @@ def ShowOneStepPrediction(model, x, y_true, numTimeSteps, imageHeight, imageWidt
 
 
 #########################################################################################################
-# ShowMultipleStepPrediction
+# ShowConvLSTMPrediction
 #
-# Shows model prediction for one time-step in advance
+# Shows model prediction for ConvLSTM architecture
 #
 # Parameters:
 #   model:          (tf.model)  Trained tensorflow model
 #   x:              (tf.tensor) Time series to have prediction performed on
+#   y:              (tf.tensor) Time series containing true values
 #   numTimeSteps    (int)       Number of time steps that model was trained on
 #   imageHeight     (int)       Height of images in data set
 #   imageWidth      (int)       Width of images in data set
@@ -89,5 +90,26 @@ def ShowOneStepPrediction(model, x, y_true, numTimeSteps, imageHeight, imageWidt
 # Returns:
 #   None
 #########################################################################################################
-def ShowMultipleStepPrediction(model, x, numTimeSteps, imageHeight, imageWidth):
-    pass
+def ShowConvLSTMPrediction(model, x, y_true, numTimeSteps, imageHeight, imageWidth):
+
+    y_pred = model.predict(tf.reshape(x, (1, numTimeSteps, imageHeight, imageWidth)))
+    y_pred = tf.reshape(y_pred, (numTimeSteps, imageHeight, imageWidth, 1))
+
+    fig, axs = plt.subplots(2,numTimeSteps+1, sharex="col", sharey="row")
+
+    for row in axs:
+        for col in row:
+            col.get_xaxis().set_visible(False)
+            col.get_yaxis().set_visible(False)
+
+    axs[0][0].set_title(f"Slice {numTimeSteps}")
+    axs[0][0].imshow(tf.reshape(x[-1], (imageHeight, imageWidth,1)).numpy(), cmap="gray")
+    axs[1][0].set_title(f"Slice {numTimeSteps}")
+    axs[1][0].imshow(tf.reshape(x[-1], (imageHeight, imageWidth,1)).numpy(), cmap="gray")
+
+    for i in range(1, numTimeSteps+1):
+        axs[0][i].set_title(f"Slice {numTimeSteps + i}")
+        axs[0][i].imshow(y_true[i-1].numpy(), cmap="gray")
+        axs[1][i].imshow(y_pred[i-1].numpy(), cmap="gray")
+    
+    plt.show()
