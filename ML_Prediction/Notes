@@ -1,0 +1,12 @@
+Use PNG over JPG due to JPG having lossy compression during saving (causes binary image to not actually be binary).
+
+Using categorial CE or softmax activation in last layer cause output of all 1.
+
+Training on white pores (0) with black background (1) seems to perform better than vice-versa
+
+Increasing timesteps between training and prediction increases resolution but shrinks pores as pred steps increase
+    (e.g. training on 3 timesteps than predicting on 10)
+
+To convert predicted image to binary, subtract the mode, multiply by 10, subtract the mean*2, multiply by 100
+
+Increasing timesteps for training allows for further prediction
