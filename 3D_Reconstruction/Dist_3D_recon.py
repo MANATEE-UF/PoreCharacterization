@@ -20,21 +20,15 @@ def readImages(inDir):
 
 def StackRotate(images, tiltAngle):
     rotated = []
-    for img in images:
-        h, w = img.shape[:2]
+    for image in images:
+        h, w = image.shape[:2]
         rotationMatrix = cv2.getRotationMatrix2D((w/2, h/2), tiltAngle, 1.0)
-        rotated_image = cv2.warpAffine(img, rotationMatrix, (w, h))
+        rotated_image = cv2.warpAffine(image, rotationMatrix, (w, h))
         rotated.append(rotated_image)
 
     return rotated
 
-def MarkPosition(image):
-    # fig, ax = plt.subplots()
-    # ax.imshow(image, cmap="gray")
-    # clicker=plt.ginput(1, timeout=0, show_clicks=True, mouse_add=1, mouse_pop=3)
-    # plt.close(fig)
-
-    # return int(clicker[0][1])
+def GetYCoord(image):
     fig, ax = plt.subplots()
     ax.imshow(image, cmap="gray")
     klicker = clicker(ax, ["Mark"], markers=["x"])
@@ -43,20 +37,31 @@ def MarkPosition(image):
 
     return position
 
+    # fig, ax = plt.subplots()
+    # ax.imshow(image, cmap="gray")
+    # clicker=plt.ginput(1, timeout=0, show_clicks=True, mouse_add=1, mouse_pop=3)
+    # plt.close(fig)
+
+    # return int(clicker[0][1])
+
 def StackVerticalShift(images):
     firstImage = images[0]
     lastImage = images[-1]
     
-    firstPos = MarkPosition(firstImage)
-    secondPos = MarkPosition(lastImage)
+    firstPos = GetYCoord(firstImage)
+    secondPos = GetYCoord(lastImage)
     shift = abs(secondPos - firstPos)/len(images)
 
     shifted = []
-    for count, img in enumerate(images):
-        translation = transform.SimilarityTransform(translation=(0, -2*shift*count))
-        shiftedImg = transform.warp(img, translation)
-        shiftedImg = (shiftedImg*255).astype(np.uint8)
-        shifted.append(shiftedImg)
+    for count, image in enumerate(images):
+        translation = transform.SimilarityTransform(translation=(0, -1*shift*count))
+        # translation = transform.EuclideanTransform(translation = [0, (-1*shift*count)])
+        shiftedImage = transform.warp(image, translation)
+        shiftedImage = (shiftedImage*255).astype(np.uint8)
+        shifted.append(shiftedImage)
+    
+    return shifted
+
     # fig, ax = plt.subplots()
     # ax.imshow(firstImage, cmap="gray")
     # klicker = clicker(ax, ["Mark"], markers=["x"])
@@ -81,12 +86,43 @@ def StackVerticalShift(images):
     #     shifted.append(img)
     #     count += 1
 
-    return shifted
+    # return shifted
 
-images = readImages("C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/MOX_Slices/Stack1_B1")
-rotated = StackRotate(images=images, tiltAngle=-8.23)
-shifted = StackVerticalShift(images=rotated)
+def GetCoords(image):
+    fig, ax = plt.subplots()
+    ax.imshow(image, cmap="gray")
+    klicker = clicker(ax, ["Mark"], markers=["x"])
+    plt.show()
+    xCoord, yCoord = int(klicker.get_positions()["Mark"][0][0]), int(klicker.get_positions()["Mark"][0][1])
+    
+    return xCoord, yCoord
 
-cv2.imshow('Concat Image', cv2.resize(np.hstack((shifted[0],shifted[-1])), (1600, 600)))  # Resize the image for display
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+#This could definitely be improved, maybe drawing a bounding box and fining the top left and bottom right coords of it
+def StackCropping(images):
+    image = images[0]
+
+    x1, y1 = GetCoords(image) #Select top-left corner of AOI
+    x2, y2 = GetCoords(image) #Select bottom-right corner of AOI
+
+    cropped = []
+    for image in images:
+        cropped_image = image[y1:y2, x1:x2]
+        cropped.append(cropped_image)
+
+    return cropped
+
+def main():
+    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack1_B1"
+    outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Processed/Stack1_B1"
+
+    images = readImages(inDir)
+    rotated = StackRotate(images, tiltAngle=-8.23)
+    shifted = StackVerticalShift(rotated)
+    cropped = StackCropping(shifted)
+
+    cv2.imshow('Concat Image', cv2.resize(np.hstack((cropped[0],cropped[-1])), (1600, 600)))  # Resize the image for display
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
