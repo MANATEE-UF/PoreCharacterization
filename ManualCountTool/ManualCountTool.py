@@ -48,12 +48,56 @@ class PixelMap:
 
         for i in range(self.rows):
             for j in range(self.cols):
-                self.pixels[i][j] = Pixel(image[i][j][0], image[i][j][1], image[i][j][2], i, j)
+                self.pixels[i][j] = Pixel(image[i][j], image[i][j], image[i][j], i, j)
     
+    # Overlay grid crosses onto pixel map
+    def OverlayGrid(self, numGridPoints):
+        heightToWidthRatio = self.rows / self.cols
+        numGridRows = int(np.sqrt(heightToWidthRatio * numGridPoints))
+        numGridCols = int(numGridPoints / numGridRows)
+
+        print(f"Requested Number of Points: {numGridPoints}")
+        print(f"Actual Number of Points: {numGridRows*numGridCols}")
+
+        colPositions = np.linspace(0, self.cols, numGridCols+1, endpoint=False, dtype=int)[1:]
+        rowPositions = np.linspace(0, self.rows, numGridRows+1, endpoint=False, dtype=int)[1:]
+
+        gridCrossColor = (0,255,255)
+        gridCenters = []
+        for rowPos in rowPositions:
+            for colPos in colPositions:
+                self.gridCenters.append(self.pixels[rowPos][colPos])
+
+                # Center
+                self.pixels[rowPos][colPos].ChangeColor(gridCrossColor)
+
+                # Three above
+                self.pixels[rowPos-1][colPos].ChangeColor(gridCrossColor)
+                self.pixels[rowPos-2][colPos].ChangeColor(gridCrossColor)
+                self.pixels[rowPos-3][colPos].ChangeColor(gridCrossColor)
+
+                # Three below
+                self.pixels[rowPos+1][colPos].ChangeColor(gridCrossColor)
+                self.pixels[rowPos+2][colPos].ChangeColor(gridCrossColor)
+                self.pixels[rowPos+3][colPos].ChangeColor(gridCrossColor)
+
+                # Three right
+                self.pixels[rowPos][colPos+1].ChangeColor(gridCrossColor)
+                self.pixels[rowPos][colPos+2].ChangeColor(gridCrossColor)
+                self.pixels[rowPos][colPos+3].ChangeColor(gridCrossColor)
+
+                # Three left
+                self.pixels[rowPos][colPos-1].ChangeColor(gridCrossColor)
+                self.pixels[rowPos][colPos-2].ChangeColor(gridCrossColor)
+                self.pixels[rowPos][colPos-3].ChangeColor(gridCrossColor)
+        
+        gridCenters = np.array(self.gridCenters)
+        self.gridCenters2D = gridCenters.reshape(numGridRows, numGridCols)
+                
     # Find center of grid crosses
-    # only works if grid crosses are 1 pixel wide, need to consider wider crosses (maybe not actually)
+    # only works if grid crosses are 1 pixel wide
     def FindGridCenters(self):
-        # Locate all grid centers
+        # Locate all grid centers by finding non-gray pixels
         for pixel in self.pixels.flatten():
             if pixel.color:
                 if self.pixels[pixel.row - 1][pixel.col].color and self.pixels[pixel.row][pixel.col + 1].color:
@@ -88,6 +132,11 @@ class PixelMap:
         currentPixel = self.pixels[row][col]
 
         baseColor = (currentPixel.r, currentPixel.g, currentPixel.b)
+
+        # Check if pixel is already the requested newColor
+        if currentPixel.CompareColor(newColor):
+            return
+
         currentPixel.ChangeColor(newColor)
 
         neighbors = [self.pixels[row-1][col], self.pixels[row+1][col], self.pixels[row][col-1], self.pixels[row][col+1]]
@@ -98,7 +147,7 @@ class PixelMap:
 
     def ChangeGridColor(self, index, newColor):
         center = self.gridCenters[index]
-        self.ChangeConnectingColor(self.gridCenters[index].row, self.gridCenters[index].col, newColor)
+        self.ChangeConnectingColor(center.row, center.col, newColor)
 
     # Returns np array containing image around grid center based on index
     def GetGridCenterImage(self, index, numSurroundingPixels=50):
@@ -150,7 +199,7 @@ class MplCanvas(FigureCanvasQTAgg):
 
 class MyWindow(QMainWindow):
 
-    def __init__(self, imagePath):
+    def __init__(self, imagePath, numGridPoints):
         super(MyWindow,self).__init__()
 
         self.setWindowTitle("Pore Counter Tool")
@@ -212,7 +261,7 @@ class MyWindow(QMainWindow):
 
         self.imageName = imagePath
 
-        self.InitializeImage(imagePath)
+        self.InitializeImage(imagePath, numGridPoints)
         self.numSurroundingPixels = 50
 
         self.nextIndex = 0
@@ -227,7 +276,7 @@ class MyWindow(QMainWindow):
         self.widget.setFocus(QtCore.Qt.NoFocusReason)
     
     def ZoomOut(self):
-        if self.numSurroundingPixels < 200:
+        if self.numSurroundingPixels < 300:
             self.numSurroundingPixels += 25
         
         newImage = self.myMap.GetGridCenterImage(self.nextIndex, self.numSurroundingPixels)
@@ -236,7 +285,7 @@ class MyWindow(QMainWindow):
         self.sc.axes.imshow(newImage)
         self.sc.draw()
 
-        if self.numSurroundingPixels == 200:
+        if self.numSurroundingPixels == 300:
             self.zoomOutButton.setEnabled(False)
         else:
             self.zoomOutButton.setEnabled(True)
@@ -263,17 +312,18 @@ class MyWindow(QMainWindow):
         else:
             self.zoomInButton.setEnabled(True)
 
-        if self.numSurroundingPixels == 200:
+        if self.numSurroundingPixels == 300:
             self.zoomOutButton.setEnabled(False)
         else:
             self.zoomOutButton.setEnabled(True)
         
         self.widget.setFocus(QtCore.Qt.NoFocusReason)
 
-    def InitializeImage(self,imagePath):
+    def InitializeImage(self,imagePath, numGridPoints):
         image = io.imread(imagePath)
         self.myMap = PixelMap(image)
-        self.myMap.FindGridCenters()
+        self.myMap.OverlayGrid(numGridPoints)
+        # self.myMap.FindGridCenters()
         self.poreData = np.zeros(len(self.myMap.gridCenters))
 
     def keyPressEvent(self, event):
@@ -288,10 +338,16 @@ class MyWindow(QMainWindow):
             self.lastEntryText.setText("Last Data Entry: 1")
         elif event.key() == QtCore.Qt.Key_Down:
             self.RecordDataPoint(-1)
+            self.lastEntryText.setText("Last Data Entry: Back")
+        elif event.key() == QtCore.Qt.Key_Plus:
+            self.ZoomIn()
+        elif event.key() == QtCore.Qt.Key_Minus:
+            self.ZoomOut()
         else:
             pass
     
     def RecordDataPoint(self, value):
+        # -1 is go back
         if value == -1 and self.nextIndex > 0:
             self.myMap.ChangeGridColor(self.nextIndex, (255,255,0))
             self.nextIndex -= 1
@@ -304,11 +360,15 @@ class MyWindow(QMainWindow):
         
         if self.nextIndex >= len(self.myMap.gridCenters):
             self.poreData = self.poreData.reshape(len(self.myMap.gridCenters2D), len(self.myMap.gridCenters2D[0]))
-            np.savetxt(f"{os.path.splitext(os.path.basename(self.imageName))[0]}_countData.csv", self.poreData, delimiter=",")
+            np.savetxt(f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv", 
+                       self.poreData, 
+                       fmt="%.2f", 
+                       delimiter=",", 
+                       header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {len(self.myMap.gridCenters)} grid points \n",
+                       footer=f"\n Porosity: {np.sum(self.poreData) / (np.shape(self.poreData)[0] * np.shape(self.poreData)[1]) * 100}")
             print(f"Porosity: {np.sum(self.poreData) / (np.shape(self.poreData)[0] * np.shape(self.poreData)[1]) * 100}")
             quit()
 
-        self.myMap.ChangeGridColor(self.nextIndex, (255,0,0))
         newImage = self.myMap.GetGridCenterImage(self.nextIndex, self.numSurroundingPixels)
 
         self.sc.axes.cla()
@@ -318,15 +378,14 @@ class MyWindow(QMainWindow):
 def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
-    win = MyWindow("manualA001-15.tif")
+
+    # Adjust the file name and number of grid points as needed
+    filename = "ManualCountTool/TestData/manualA001-15um2.tif"
+    numberOfGridPoints = 100
+    win = MyWindow(filename, numberOfGridPoints)
 
     win.show()
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    # main()
-    image = io.imread("ManualCountTool/TestData/manualA001-15um2.tif")
-    plt.imshow(image)
-    plt.show()
-    myMap = PixelMap(image)
-    myMap.ShowImage()
+    main()
