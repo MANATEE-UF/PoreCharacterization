@@ -1,5 +1,5 @@
 import numpy as np
-from skimage import io, transform, color
+from skimage import io, transform, filters, morphology, color, exposure
 import matplotlib.pyplot as plt
 from mpl_point_clicker import clicker
 import os
@@ -7,6 +7,7 @@ import cv2
 from scipy.signal import wiener
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 from matplotlib.widgets import RectangleSelector
+from PIL import Image
 
 def readImages(inDir):
     image_list = os.listdir(inDir)
@@ -35,6 +36,9 @@ def StackRotate(images, tiltAngle):
         else:
             print("Warning: Skipping image at index {} (Returned None)".format(i))
 
+    if saveImages is True:
+        SaveImages(rotated, "Rotated")
+
     return rotated
 
 def GetYCoord(image):
@@ -53,25 +57,84 @@ def GetYCoord(image):
         print("Please select only one mark on the image.")
         return None
 
-#Doesn't seem too shift well, may be good to add loop that increases shift until user says otherwise
 def StackVerticalShift(rotated, shift=None):
-    firstImage = rotated[0]
-    lastImage = rotated[-1]
-    
     if shift == None:
+        shiftAgain = True
+
+        firstImage = rotated[0]
+        lastImage = rotated[-1]
+
         print("Pick a point that will be visible in the final image slice")
         firstPos = GetYCoord(firstImage)
         print("Pick that same point on the final image slice")
         secondPos = GetYCoord(lastImage)
-        shift = abs(secondPos - firstPos)/len(rotated)
-        
-    shifted = []
-    for count, image in enumerate(rotated):
-        translation = transform.SimilarityTransform(translation=(0, -1*shift*count))
-        shiftedImage = transform.warp(image, translation)
-        shiftedImage = (shiftedImage*255).astype(np.uint8)
-        shifted.append(shiftedImage)
+        shiftNumerator = abs(secondPos - firstPos)
+        shiftDenominator = len(rotated)
+
+        while shiftAgain == True:
+            shift = shiftNumerator/shiftDenominator
+
+            shifted = []
+            for count, image in enumerate(rotated):
+                translation = transform.SimilarityTransform(translation=(0, -1*shift*count))
+                shiftedImage = transform.warp(image, translation)
+                shiftedImage = (shiftedImage*255).astype(np.uint8)
+                shifted.append(shiftedImage)
+
+            plt.figure(figsize=(8, 6))
+
+            plt.subplot(1, 2, 1)
+            plt.imshow(shifted[0], cmap='gray')
+            plt.title('First Slice')
+
+            plt.subplot(1, 2, 2)
+            plt.imshow(shifted[-1], cmap='gray')
+            plt.title('Final Slice')
+            
+            plt.tight_layout()
+            plt.show()
+
+            while True:
+                ans = input("Apply bigger shift [Y/N] or use previous shift margin [R]: ")
+
+                if ans == "Y":
+                    shiftDenominator -= 5
+                    shiftAgain = True
+                    break
+
+                elif ans == "N":
+                    print(f"Best shift margin is {shift}")
+                    shiftAgain = False
+                    break
+
+                elif ans == "R":
+                    shiftDenominator += 5
+                    shift = shiftNumerator/shiftDenominator
+
+                    shifted = []
+                    for count, image in enumerate(rotated):
+                        translation = transform.SimilarityTransform(translation=(0, -1*shift*count))
+                        shiftedImage = transform.warp(image, translation)
+                        shiftedImage = (shiftedImage*255).astype(np.uint8)
+                        shifted.append(shiftedImage)
+                    
+                    print(f"Best shift margin is {shift}")
+                    shiftAgain = False
+                    break
+
+                else:
+                    print("Invalid Input")
+    else:
+        shifted = []
+        for count, image in enumerate(rotated):
+            translation = transform.SimilarityTransform(translation=(0, -1*shift*count))
+            shiftedImage = transform.warp(image, translation)
+            shiftedImage = (shiftedImage*255).astype(np.uint8)
+            shifted.append(shiftedImage)
     
+    if saveImages is True:
+        SaveImages(shifted, "Shifted")
+
     return shifted
 
 def GetRectangleCoords(image):
@@ -91,13 +154,16 @@ def GetRectangleCoords(image):
 def StackCropping(shifted):
     shifted1st = shifted[0]
 
-    print("Select top-left and bottom-right corners of rectangular AOI")
+    print("Select rectangular AOI")
     x1, y1, x2, y2 = GetRectangleCoords(shifted1st) #Select top-left and bottom-right corner of rectangular AOI
 
     cropped = []
     for image in shifted:
         cropped_image = image[y1:y2, x1:x2]
         cropped.append(cropped_image)
+
+    if saveImages is True:
+        SaveImages(cropped, "Cropped")
 
     return cropped
 
@@ -111,16 +177,19 @@ def NoiseReduction(cropped):
         filteredImg = (filteredImg * 255).astype(np.uint8)
         filtered.append(filteredImg)
 
+    if saveImages is True:
+        SaveImages(filtered, "Filtered")
+
     return filtered
 
 def CreateRectangleMask(image):
     h, w = image.shape[:2]
     remove = np.zeros((h, w), dtype=np.uint8)
 
-    print("Select top-left (blue x) and bottom-right (red x) corners of 1st rectangular AOI")
+    print("Select 1st rectangular AOI")
     R1x1, R1y1, R1x2, R1y2 = GetRectangleCoords(image) #Select top-left and bottom-right corner of Left Rectangle
    
-    print("Select top-left (blue x) and bottom-right (red x) corners of 2nd rectangular AOI")
+    print("Select 2nd rectangular AOI")
     R2x1, R2y1, R2x2, R2y2 = GetRectangleCoords(image) #Select top-left and bottom-right corner of Right Rectangle
 
     # Rectangles should extand to outer edges, hard to do so with GetCoords() so this extends the correct cordinates for each rectangle
@@ -132,13 +201,9 @@ def CreateRectangleMask(image):
     
     remove[R1y1:R1y2+1, R1x1:R1x2+1] = 1
     remove[R2y1:R2y2+1, R2x1:R2x2+1] = 1
-
-    cv2.imshow('Binary Mask', remove)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows
     return remove
 
-# NOT WORKING
+#Not saving 2nd image of fftFiltered
 def FFT_Filtering(filtered):
     applyFilterAgain = True
 
@@ -148,7 +213,6 @@ def FFT_Filtering(filtered):
         imgAbsLog = np.log(1+np.abs(img[0]))
         
         remove = CreateRectangleMask(imgAbsLog)
-        print(remove.shape)
 
         maskedImg = np.empty_like(img, dtype=complex)
         maskedImg[0] = img[0] - (img[0] * remove)
@@ -195,6 +259,9 @@ def FFT_Filtering(filtered):
     normalizedRealImages = (realImages - min) / (max - min) * 255
     fftFiltered = normalizedRealImages.astype(np.uint8)
 
+    if saveImages is True:
+        SaveImages(fftFiltered, "FFTFiltered")
+
     return fftFiltered
 
 def CheckArray(array):
@@ -203,14 +270,44 @@ def CheckArray(array):
     else:
         print("It's not a NumPy array.")
 
+def SaveImages(images, folderName):
+    if not os.path.exists(outDir):
+        print("Invalid Directory")
+    else:
+        folderPath = os.path.join(outDir, folderName)    
+        
+        if not os.path.exists(folderPath):
+            os.makedirs(folderPath)
+        
+        # images = np.array(images).astype(np.uint8)
+
+        for i, image in enumerate(images):
+            fileName = f"{folderName}_{i}.tif"
+            img = Image.fromarray(image, 'L')
+            img.save(os.path.join(folderPath, fileName))
+
+def DetermineThreshold(fftFiltered, deltaZ, nmPerPixel):
+    fftFiltered = np.array(fftFiltered)
+
+    smooth = filters.gaussian(fftFiltered, sigma=0.5)
+
+    dims = smooth.shape
+    newDims = (dims[0], dims[1], round(dims[2]*deltaZ))
+
+    thresh = filters.threshold_otsu(smooth)
+
+    
+    voids = smooth < thresh #Use > for light selection (EDS). Use < for dark selection (bubbles)
 
 def main():
+    global inDir, outDir, saveImages
     inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
-    outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Processed/Stack3_D"
+    outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
+    saveImages = False
 
     images = readImages(inDir)
     rotated = StackRotate(images, tiltAngle=-3.5)
-    shifted = StackVerticalShift(rotated)
+    shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
     cropped = StackCropping(shifted)
     filtered = NoiseReduction(cropped)
     fftFiltered = FFT_Filtering(filtered)
