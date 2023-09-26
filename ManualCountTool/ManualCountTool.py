@@ -380,7 +380,7 @@ def main():
     app.setStyle("Fusion")
 
     # Adjust the file name and number of grid points as needed
-    filename = "ManualCountTool/TestData/manualA001-15um2.tif"
+    filename = "ManualCountTool/TestData/SE-28C-OuterBand-TestImage.tif"
     numberOfGridPoints = 100
     win = MyWindow(filename, numberOfGridPoints)
 
