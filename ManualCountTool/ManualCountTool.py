@@ -320,7 +320,8 @@ class MyWindow(QMainWindow):
         self.widget.setFocus(QtCore.Qt.NoFocusReason)
 
     def InitializeImage(self,imagePath, numGridPoints):
-        image = io.imread(imagePath)
+        image = io.imread(imagePath, as_gray=True) # Enforces gray scale to ensure pixel map read consistently
+        image *= 255
         self.myMap = PixelMap(image)
         self.myMap.OverlayGrid(numGridPoints)
         # self.myMap.FindGridCenters()
