@@ -1,5 +1,5 @@
 import numpy as np
-from skimage import io, transform, filters, morphology, color, exposure
+from skimage import io, transform
 import matplotlib.pyplot as plt
 from mpl_point_clicker import clicker
 import os
@@ -8,6 +8,11 @@ from scipy.signal import wiener
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 from matplotlib.widgets import RectangleSelector
 from PIL import Image
+from scipy.ndimage import zoom, gaussian_filter
+from skimage.filters import gaussian, threshold_multiotsu, threshold_otsu
+from skimage.morphology import opening, closing, disk, ball
+from skimage.segmentation import active_contour, clear_border
+from tqdm import tqdm
 
 def readImages(inDir):
     image_list = os.listdir(inDir)
@@ -182,9 +187,10 @@ def NoiseReduction(cropped):
 
     return filtered
 
-def CreateRectangleMask(image):
+#May want to consider making mask boolean array (should work the same as it currently does, just more efficient)
+def CreateDoubleRectangleMask(image):
     h, w = image.shape[:2]
-    remove = np.zeros((h, w), dtype=np.uint8)
+    mask = np.zeros((h, w), dtype=np.uint8)
 
     print("Select 1st rectangular AOI")
     R1x1, R1y1, R1x2, R1y2 = GetRectangleCoords(image) #Select top-left and bottom-right corner of Left Rectangle
@@ -199,11 +205,10 @@ def CreateRectangleMask(image):
     if R2x2 != w - 1:
         R2x2 = w - 1
     
-    remove[R1y1:R1y2+1, R1x1:R1x2+1] = 1
-    remove[R2y1:R2y2+1, R2x1:R2x2+1] = 1
-    return remove
+    mask[R1y1:R1y2+1, R1x1:R1x2+1] = 1
+    mask[R2y1:R2y2+1, R2x1:R2x2+1] = 1
+    return mask
 
-#Not saving 2nd image of fftFiltered
 def FFT_Filtering(filtered):
     applyFilterAgain = True
 
@@ -212,7 +217,7 @@ def FFT_Filtering(filtered):
         img[0] = fftshift(fft2(filtered[0]))
         imgAbsLog = np.log(1+np.abs(img[0]))
         
-        remove = CreateRectangleMask(imgAbsLog)
+        remove = CreateDoubleRectangleMask(imgAbsLog)
 
         maskedImg = np.empty_like(img, dtype=complex)
         maskedImg[0] = img[0] - (img[0] * remove)
@@ -245,10 +250,10 @@ def FFT_Filtering(filtered):
             else:
                 print("Invalid Input")
     
-    for i in range(2, len(filtered)):
+    for i in range(1, len(filtered)):
         img[i] = fftshift(fft2(filtered[i]))
 
-    for i in range(2, len(filtered)):
+    for i in range(1, len(filtered)):
         maskedImg[i] = img[i] - (img[i] * remove)
         fftFiltered[i] = ifft2(ifftshift(maskedImg[i]))
     
@@ -264,12 +269,108 @@ def FFT_Filtering(filtered):
 
     return fftFiltered
 
-def CheckArray(array):
-    if isinstance(array, np.ndarray):
-        print("It's a NumPy array!")
-    else:
-        print("It's not a NumPy array.")
+def Imover(inputImage, mask, color=[255,255,255]):
+    mask = mask != 0
 
+    formattedImage = np.uint8(inputImage)
+
+    if formattedImage.dim == 2:
+        #Input is grayscale. Initialize all output channels the same
+        outRed = formattedImage
+        outGreen = formattedImage
+        outBlue = formattedImage
+    else:
+        #Input is RGB truecolor
+        outRed = formattedImage[:,:,0]
+        outGreen = formattedImage[:,:,1]
+        outBlue = formattedImage[:,:,2]
+
+    outRed[mask] = np.round(color[0]).astype(np.uint8) + outRed[mask]
+    outGreen[mask] = np.round(color[1]).astype(np.uint8) + outGreen[mask]
+    outBlue[mask] = np.round(color[2]).astype(np.uint8) + outBlue[mask]
+
+    out = cv2.merge([outBlue, outGreen, outRed])
+    
+    return out
+
+def ThreshFeedback(img, lowThresh, highThresh, name):
+    slice = img[:, :, round(img.shape[2] / 5)]
+    slice = np.pad(slice, ((0, img.shape[0]), (0, img.shape[1])), mode='constant', constant_values=0)
+    slice_BW = np.logical_and(slice > lowThresh, slice < highThresh)
+    slice_BW = opening(slice_BW, disk(2))
+    high_thresh_str = str(highThresh)
+    kg = True
+    while kg:
+        temp = Imover(slice, slice_BW, [0.1, -0.2, -0.2])
+        cv2.imshow('Threshold Image', temp)
+        button = cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        if button == ord('y') or button == ord('Y'):
+            kg = False
+        else:
+            high_thresh_str = input('Enter new {} threshold: '.format(name))
+            slice_BW = np.logical_and(slice > lowThresh, slice < float(high_thresh_str))
+            slice_BW = opening(slice_BW, disk(2))
+    return float(high_thresh_str)
+
+def DetermineThreshold(fftFiltered, deltaZ):
+    fftFiltered = np.array(fftFiltered)
+
+    smooth = gaussian(fftFiltered, sigma=0.5, mode='nearest', truncate=2.0)
+    #Can also try
+    #smooth = gaussian_filter(fftFiltered, sigma=0.5)
+
+    smooth = zoom(smooth, zoom=(1,1,deltaZ))
+    thresh = threshold_multiotsu(smooth, classes=4)
+    
+    thresh = ThreshFeedback(smooth, 0, thresh[0], 'pore')
+    
+    voids = smooth < thresh #Use > for light selection (EDS). Use < for dark selection (bubbles)
+
+    return smooth, voids
+
+def EDSThresholdCleaningMask(smooth, voids):
+    dims = smooth.shape
+    AoI = StackCropping(smooth)
+    for i in tqdm(range(dims[2]), desc='Removing small pores and filling gaps'):
+        temp = voids[:, :, i].copy()
+        temp[~AoI] = 0
+        voids[:, :, i] = temp
+        voids[:, :, i] = opening(voids[:, :, i], disk(2))
+        voids[:, :, i] = closing(voids[:, :, i], disk(5))
+        voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
+
+    # Optimizing pore contours for best fit
+    for i in tqdm(range(dims[2]), desc='Optimizing pore contours for best fit'):
+        voids[:, :, i] = active_contour(smooth[:, :, i], voids[:, :, i], max_iterations=20, boundary_condition='edge')
+
+    return voids
+
+def BubbleThresholdCleaningMask(smooth, voids):
+    dims = smooth.shape
+    AoI = StackCropping(smooth)
+
+    for i in range(dims[2]):
+        temp = ~cv2.threshold(smooth[:, :, i], 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+        temp = cv2.bitwise_not(temp)
+        temp[~AoI] = 0
+        voids[:, :, i] = temp
+
+    voids = opening(voids, ball(1))
+    voids = cv2.fillPoly(np.uint8(voids), [np.array(AoI, dtype=np.int32)], 255)
+    voids = closing(voids, ball(3))
+
+    for i in range(dims[2]):
+        voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
+
+    voids = active_contour(smooth, voids, max_iterations=100, boundary_condition='edge')
+
+    for i in range(dims[2]):
+        voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
+
+    voids = opening(voids, ball(1))
+    voids = voids.astype(bool)
+    
 def SaveImages(images, folderName):
     if not os.path.exists(outDir):
         print("Invalid Directory")
@@ -286,34 +387,22 @@ def SaveImages(images, folderName):
             img = Image.fromarray(image, 'L')
             img.save(os.path.join(folderPath, fileName))
 
-def DetermineThreshold(fftFiltered, deltaZ, nmPerPixel):
-    fftFiltered = np.array(fftFiltered)
-
-    smooth = filters.gaussian(fftFiltered, sigma=0.5)
-
-    dims = smooth.shape
-    newDims = (dims[0], dims[1], round(dims[2]*deltaZ))
-
-    thresh = filters.threshold_otsu(smooth)
-
-    
-    voids = smooth < thresh #Use > for light selection (EDS). Use < for dark selection (bubbles)
-
 def main():
     global inDir, outDir, saveImages
-    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
+    # inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
+    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/FFTFiltered"
     outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
     saveImages = False
 
-    images = readImages(inDir)
-    rotated = StackRotate(images, tiltAngle=-3.5)
-    shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
-    cropped = StackCropping(shifted)
-    filtered = NoiseReduction(cropped)
-    fftFiltered = FFT_Filtering(filtered)
-    cv2.imshow('FFT Filtered image', fftFiltered[0])
-    cv2.waitKey(0)
-    cv2.destroyAllWindows
+    # images = readImages(inDir)
+    # rotated = StackRotate(images, tiltAngle=-3.5)
+    # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
+    # cropped = StackCropping(shifted)
+    # filtered = NoiseReduction(cropped)
+    # fftFiltered = FFT_Filtering(filtered)
+
+    fftFiltered = readImages(inDir)
+    smooth, voids = DetermineThreshold(fftFiltered, 59)
 
 if __name__ == "__main__":
     main()
