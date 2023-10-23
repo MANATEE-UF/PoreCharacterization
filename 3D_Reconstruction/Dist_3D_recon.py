@@ -1,5 +1,5 @@
 import numpy as np
-from skimage import io, transform
+from skimage import transform
 import matplotlib.pyplot as plt
 from mpl_point_clicker import clicker
 import os
@@ -8,28 +8,31 @@ from scipy.signal import wiener
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 from matplotlib.widgets import RectangleSelector
 from PIL import Image
-from scipy.ndimage import zoom, gaussian_filter
-from skimage.filters import gaussian, threshold_multiotsu, threshold_otsu
+from scipy.ndimage import zoom, binary_fill_holes
+from skimage.filters import gaussian, threshold_multiotsu
 from skimage.morphology import opening, closing, disk, ball
-from skimage.segmentation import active_contour, clear_border
+from skimage.segmentation import active_contour
 from tqdm import tqdm
 
-def readImages(inDir):
+#Reads images from a given directory of images. Does not read any files that do not have the specified file extension
+def ReadImages(inDir, fileExtension):
     image_list = os.listdir(inDir)
     image_list.sort()
 
     images = []
     for image_file in image_list:
-        if image_file.endswith(".tif"):
+        if image_file.endswith(fileExtension):
             image_path = os.path.join(inDir, image_file)
             image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
             images.append(image)
         else:
-            print(f"Removed File {image_file} (Returned None)")
+            print(f"Removed File {image_file}")
 
     return images
 
-def StackRotate(images, tiltAngle):
+#Rotates each image in the image stack about its center by a given angle
+#Note: Positive tiltAngle corresponds to CCW, Negative tiltAngle corresponds to CW
+def StackRotate(images, tiltAngle, saveImages=False):
     rotated = []
 
     for i, image in enumerate(images):
@@ -46,6 +49,7 @@ def StackRotate(images, tiltAngle):
 
     return rotated
 
+#Finds the Y coordinate of a manually selected point on an image
 def GetYCoord(image):
     fig, ax = plt.subplots()
     ax.imshow(image, cmap="gray")
@@ -62,7 +66,9 @@ def GetYCoord(image):
         print("Please select only one mark on the image.")
         return None
 
-def StackVerticalShift(rotated, shift=None):
+#Vertically shifts each image in the image stack until they are aligned with the first image slice in the stack
+#Note: This function will manually compute the shift margin interactively unless a known shift margin is specified
+def StackVerticalShift(rotated, shift=None, saveImages=False):
     if shift == None:
         shiftAgain = True
 
@@ -142,6 +148,7 @@ def StackVerticalShift(rotated, shift=None):
 
     return shifted
 
+#Finds the Xmin, Ymin, Xmax, and Ymax values of a manually selected rectangular area on an image
 def GetRectangleCoords(image):
     def onselect(eclick, erelease):
         global xmin, xmax, ymin, ymax
@@ -156,7 +163,7 @@ def GetRectangleCoords(image):
 
     return xmin, ymin, xmax, ymax
 
-def StackCropping(shifted):
+def StackCropping(shifted, saveImages=False):
     shifted1st = shifted[0]
 
     print("Select rectangular AOI")
@@ -172,7 +179,7 @@ def StackCropping(shifted):
 
     return cropped
 
-def NoiseReduction(cropped):
+def NoiseReduction(cropped, saveImages=False):
     filtered = []
 
     for i in range(len(cropped)):
@@ -187,10 +194,11 @@ def NoiseReduction(cropped):
 
     return filtered
 
-#May want to consider making mask boolean array (should work the same as it currently does, just more efficient)
+#Creates a boolean mask where the areas of two manually selected rectangles on an image are set as True and everything else is set to False
+#This function is needed to mask high frequencies correlating to curtaining effects
 def CreateDoubleRectangleMask(image):
     h, w = image.shape[:2]
-    mask = np.zeros((h, w), dtype=np.uint8)
+    mask = np.zeros((h, w), dtype=np.bool_)
 
     print("Select 1st rectangular AOI")
     R1x1, R1y1, R1x2, R1y2 = GetRectangleCoords(image) #Select top-left and bottom-right corner of Left Rectangle
@@ -205,11 +213,16 @@ def CreateDoubleRectangleMask(image):
     if R2x2 != w - 1:
         R2x2 = w - 1
     
-    mask[R1y1:R1y2+1, R1x1:R1x2+1] = 1
-    mask[R2y1:R2y2+1, R2x1:R2x2+1] = 1
+    mask[R1y1:R1y2+1, R1x1:R1x2+1] = True
+    mask[R2y1:R2y2+1, R2x1:R2x2+1] = True
+
+    print(type(mask))
+    plt.imshow(mask, cmap='gray')
+    plt.show()
     return mask
 
-def FFT_Filtering(filtered):
+#Performs Fourier Fast Transform filtering in the frequency domain of each image in the image stack to remove curtaining effects
+def FFT_Filtering(filtered, saveImages=False):
     applyFilterAgain = True
 
     while applyFilterAgain is True:
@@ -241,10 +254,10 @@ def FFT_Filtering(filtered):
         while True:
             ans = input("Apply FFT filter again? [Y/N]: ")
 
-            if ans == "Y":
+            if ans == "Y" or ans == "y":
                 applyFilterAgain = True
                 break
-            elif ans == "N":
+            elif ans == "N" or ans == 'n':
                 applyFilterAgain = False
                 break
             else:
@@ -269,12 +282,13 @@ def FFT_Filtering(filtered):
 
     return fftFiltered
 
-def Imover(inputImage, mask, color=[255,255,255]):
-    mask = mask != 0
-
+#Creates a mask-based image overlay
+def Imover(inputImage, mask, color=[1,1,1]):
+    #Ensures formattedImage and mask are uint8 and binary data types respectively
     formattedImage = np.uint8(inputImage)
+    mask = (mask != 0)
 
-    if formattedImage.dim == 2:
+    if formattedImage.ndim == 2:
         #Input is grayscale. Initialize all output channels the same
         outRed = formattedImage
         outGreen = formattedImage
@@ -285,66 +299,97 @@ def Imover(inputImage, mask, color=[255,255,255]):
         outGreen = formattedImage[:,:,1]
         outBlue = formattedImage[:,:,2]
 
-    outRed[mask] = np.round(color[0]).astype(np.uint8) + outRed[mask]
-    outGreen[mask] = np.round(color[1]).astype(np.uint8) + outGreen[mask]
-    outBlue[mask] = np.round(color[2]).astype(np.uint8) + outBlue[mask]
+    outRed[mask] = np.round(color[0]*255).astype(np.uint8) + outRed[mask]
+    outGreen[mask] = np.round(color[1]*255).astype(np.uint8) + outGreen[mask]
+    outBlue[mask] = np.round(color[2]*255).astype(np.uint8) + outBlue[mask]
 
-    out = cv2.merge([outBlue, outGreen, outRed])
+    out = cv2.merge([outBlue, outGreen, outRed]) #cv2.merge uses BGR format for internal processing, out will still be RGB
     
     return out
 
-def ThreshFeedback(img, lowThresh, highThresh, name):
-    slice = img[:, :, round(img.shape[2] / 5)]
-    slice = np.pad(slice, ((0, img.shape[0]), (0, img.shape[1])), mode='constant', constant_values=0)
-    slice_BW = np.logical_and(slice > lowThresh, slice < highThresh)
-    slice_BW = opening(slice_BW, disk(2))
-    high_thresh_str = str(highThresh)
-    kg = True
-    while kg:
-        temp = Imover(slice, slice_BW, [0.1, -0.2, -0.2])
-        cv2.imshow('Threshold Image', temp)
-        button = cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        if button == ord('y') or button == ord('Y'):
-            kg = False
-        else:
-            high_thresh_str = input('Enter new {} threshold: '.format(name))
-            slice_BW = np.logical_and(slice > lowThresh, slice < float(high_thresh_str))
-            slice_BW = opening(slice_BW, disk(2))
-    return float(high_thresh_str)
+#Manually determines what threshold is appropriate given 4 threshold values
+##May want to expand funcitonality such that any threshold value can be entered, similar to the MATLAB code##
+def ThreshFeedback(img, thresh, name):
+    lowThresh = 0
+    threshIndex = 0
+    highThresh = thresh[threshIndex]
+    dims = img.shape
 
-def DetermineThreshold(fftFiltered, deltaZ):
+    #indexing method is smooth[z,x,y]
+
+    slice1 = img[round(dims[0]/5),:,:]
+    slice2 = img[round(dims[0]*2/5),:,:]
+    slice3 = img[round(dims[0]*3/5),:,:]
+    slice4 = img[round(dims[0]*4/5),:,:]
+
+    slice = np.vstack([np.hstack([slice1, slice2]), np.hstack([slice3, slice4])])
+    slice_BW = (slice > lowThresh) & (slice < highThresh)
+    slice_BW = opening(slice_BW, disk(2))
+
+    while True:
+        temp = Imover(slice, slice_BW, [.1, -.2, -.2])
+        plt.imshow(temp)
+        plt.show()
+        button = input('Press [Y] if threshold is acceptable, or [R] to use previous threshold. Otherwise, enter any key to use next threshold value: ')
+        if button == 'y' or button == 'Y':
+            break
+        elif button == 'r' or button =='R':
+            if threshIndex - 1 >= 0:
+                highThresh = thresh[threshIndex-1]
+                break
+            else:
+                print("Cannot return to previous threshold. Using next threshold value.")
+                threshIndex += 1
+                highThresh = thresh[threshIndex]
+                slice_BW = (slice > lowThresh) & (slice < highThresh)
+                slice_BW = opening(slice_BW, disk(2))
+        else:
+            try:
+                threshIndex += 1
+                highThresh = thresh[threshIndex]
+                slice_BW = (slice > lowThresh) & (slice < highThresh)
+                slice_BW = opening(slice_BW, disk(2))
+            except:
+                print("No thresholds remaining. Using current threshold value.")
+                break
+    
+    return float(highThresh)
+
+#Expands image and returns binary array containing the voids in each image slice, depending on whether a light or dark selection is desired
+def Thresholding(fftFiltered, deltaZ):
     fftFiltered = np.array(fftFiltered)
 
     smooth = gaussian(fftFiltered, sigma=0.5, mode='nearest', truncate=2.0)
-    #Can also try
-    #smooth = gaussian_filter(fftFiltered, sigma=0.5)
+    smooth = (smooth*255).astype(np.uint8) #Converts to uint8 image, makes zoom() much less demanding
 
-    smooth = zoom(smooth, zoom=(1,1,deltaZ))
-    thresh = threshold_multiotsu(smooth, classes=4)
-    
-    thresh = ThreshFeedback(smooth, 0, thresh[0], 'pore')
-    
-    voids = smooth < thresh #Use > for light selection (EDS). Use < for dark selection (bubbles)
+    print("Expanding image stack and determining thresholds...")
+    smooth = zoom(smooth, zoom=(round(deltaZ), 1, 1), order=1)
 
+    thresh = threshold_multiotsu(smooth, classes=5)
+
+    displayThresh = ', '.join(map(str, thresh))
+    print('Generated threshold values are: {}'.format(displayThresh))
+
+    thresh = ThreshFeedback(smooth, thresh, 'pore')
+
+    voids = smooth < thresh
+            
     return smooth, voids
 
 def EDSThresholdCleaningMask(smooth, voids):
     dims = smooth.shape
-    AoI = StackCropping(smooth)
-    for i in tqdm(range(dims[2]), desc='Removing small pores and filling gaps'):
-        temp = voids[:, :, i].copy()
-        temp[~AoI] = 0
-        voids[:, :, i] = temp
-        voids[:, :, i] = opening(voids[:, :, i], disk(2))
-        voids[:, :, i] = closing(voids[:, :, i], disk(5))
-        voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
 
-    # Optimizing pore contours for best fit
-    for i in tqdm(range(dims[2]), desc='Optimizing pore contours for best fit'):
-        voids[:, :, i] = active_contour(smooth[:, :, i], voids[:, :, i], max_iterations=20, boundary_condition='edge')
+    for i in tqdm(range(dims[0]), desc='Removing small pores and filling gaps'):
+        voids[i,:,:] = opening(voids[i,:,:], disk(2))
+        voids[i,:,:] = closing(voids[i,:,:], disk(5))
+        voids[i,:,:] = binary_fill_holes(voids[i,:,:])
 
+    for i in tqdm(range(dims[0]), desc='Optimizing pore contours for best fit'):
+        voids[i,:,:] = active_contour(smooth[i,:,:], voids[i,:,:], max_iterations=20, alpha=0.05, beta=0.5, gamma=0.1)
+        #Replace with morphological snakes
+    
     return voids
+
 
 def BubbleThresholdCleaningMask(smooth, voids):
     dims = smooth.shape
@@ -390,19 +435,23 @@ def SaveImages(images, folderName):
 def main():
     global inDir, outDir, saveImages
     # inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
-    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/FFTFiltered"
+    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/Filtered"
     outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
     saveImages = False
 
-    # images = readImages(inDir)
+    # images = ReadImages(inDir, ".tif")
     # rotated = StackRotate(images, tiltAngle=-3.5)
     # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
     # cropped = StackCropping(shifted)
     # filtered = NoiseReduction(cropped)
     # fftFiltered = FFT_Filtering(filtered)
 
-    fftFiltered = readImages(inDir)
-    smooth, voids = DetermineThreshold(fftFiltered, 59)
+    # depth = 59/4.56
+    # fftFiltered = ReadImages(inDir, ".tif")
+    # smooth, voids = DetermineThreshold(fftFiltered, depth)
+
+    filtered = ReadImages(inDir, ".tif")
+    fftFiltered = FFT_Filtering(filtered)
 
 if __name__ == "__main__":
     main()
