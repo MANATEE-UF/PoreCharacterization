@@ -321,7 +321,6 @@ class MyWindow(QMainWindow):
 
     def InitializeImage(self,imagePath, numGridPoints):
         image = io.imread(imagePath, as_gray=True) # Enforces gray scale to ensure pixel map read consistently
-        image *= 255
         self.myMap = PixelMap(image)
         self.myMap.OverlayGrid(numGridPoints)
         # self.myMap.FindGridCenters()
@@ -381,7 +380,7 @@ def main():
     app.setStyle("Fusion")
 
     # Adjust the file name and number of grid points as needed
-    filename = "ManualCountTool/TestData/SE-28C-OuterBand-TestImage.tif"
+    filename = "manualA001-6um2.tif"
     numberOfGridPoints = 100
     win = MyWindow(filename, numberOfGridPoints)
 
