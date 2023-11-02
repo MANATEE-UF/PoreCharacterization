@@ -11,22 +11,28 @@ from PIL import Image
 from scipy.ndimage import zoom, binary_fill_holes
 from skimage.filters import gaussian, threshold_multiotsu
 from skimage.morphology import opening, closing, disk, ball
-from skimage.segmentation import active_contour
+from skimage.segmentation import morphological_chan_vese
 from tqdm import tqdm
+from mayavi import mlab
 
 #Reads images from a given directory of images. Does not read any files that do not have the specified file extension
+#Assumes image filenames are in the format: filename_#.fileExtension where # is the number of the image
 def ReadImages(inDir, fileExtension):
     image_list = os.listdir(inDir)
-    image_list.sort()
+    image_list = [file for file in image_list if file.endswith(fileExtension)]
 
+    def ExtractImgNumber(filename):
+        return int(filename.split('_')[1].split('.tif')[0])
+    
+    image_list.sort(key=ExtractImgNumber)
+    
     images = []
     for image_file in image_list:
-        if image_file.endswith(fileExtension):
-            image_path = os.path.join(inDir, image_file)
-            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-            images.append(image)
-        else:
-            print(f"Removed File {image_file}")
+        image_path = os.path.join(inDir, image_file)
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        images.append(image)
+
+    images = np.array(images)
 
     return images
 
@@ -282,34 +288,44 @@ def FFT_Filtering(filtered, saveImages=False):
 
     return fftFiltered
 
+#Expands an image stack about the number of image slices in the stack by a factor of deltaZ 
+def ExpandImageStack(images, deltaZ):
+    print("Expanding image stack...")
+    return zoom(images, zoom=(round(deltaZ), 1, 1), order=2)
+
 #Creates a mask-based image overlay
-def Imover(inputImage, mask, color=[1,1,1]):
+def Imover(inputImage, mask, color=[255, 255, 255]):
     #Ensures formattedImage and mask are uint8 and binary data types respectively
-    formattedImage = np.uint8(inputImage)
+    formattedImage = np.array(inputImage)
     mask = (mask != 0)
 
-    if formattedImage.ndim == 2:
-        #Input is grayscale. Initialize all output channels the same
-        outRed = formattedImage
-        outGreen = formattedImage
-        outBlue = formattedImage
-    else:
-        #Input is RGB truecolor
-        outRed = formattedImage[:,:,0]
-        outGreen = formattedImage[:,:,1]
-        outBlue = formattedImage[:,:,2]
+    try:
+        if formattedImage.ndim == 2:
+            #Input is grayscale. Initialize all output channels the same
+            outRed = np.copy(formattedImage)
+            outGreen = np.copy(formattedImage)
+            outBlue = np.copy(formattedImage)
+        elif formattedImage.ndim == 3:
+            #Input is RGB truecolor
+            outRed = np.copy(formattedImage[:,:,0])
+            outGreen = np.copy(formattedImage[:,:,1])
+            outBlue = np.copy(formattedImage[:,:,2])
+    except:
+        print('Invalid image entered for Imover. Only grayscale or RGB images are accepted.')
+        raise
 
-    outRed[mask] = np.round(color[0]*255).astype(np.uint8) + outRed[mask]
-    outGreen[mask] = np.round(color[1]*255).astype(np.uint8) + outGreen[mask]
-    outBlue[mask] = np.round(color[2]*255).astype(np.uint8) + outBlue[mask]
+    outRed[mask] = color[0]
+    outGreen[mask] = color[1]
+    outBlue[mask] = color[2]
 
-    out = cv2.merge([outBlue, outGreen, outRed]) #cv2.merge uses BGR format for internal processing, out will still be RGB
-    
+    out = np.stack((outRed, outGreen, outBlue), axis=-1)
+    out = out.astype(np.uint8)
+
     return out
 
+
 #Manually determines what threshold is appropriate given 4 threshold values
-##May want to expand funcitonality such that any threshold value can be entered, similar to the MATLAB code##
-def ThreshFeedback(img, thresh, name):
+def ThreshFeedback(img, thresh):
     lowThresh = 0
     threshIndex = 0
     highThresh = thresh[threshIndex]
@@ -327,56 +343,114 @@ def ThreshFeedback(img, thresh, name):
     slice_BW = opening(slice_BW, disk(2))
 
     while True:
-        temp = Imover(slice, slice_BW, [.1, -.2, -.2])
+        temp = Imover(slice, slice_BW, [100, 0, 0])
+
         plt.imshow(temp)
         plt.show()
-        button = input('Press [Y] if threshold is acceptable, or [R] to use previous threshold. Otherwise, enter any key to use next threshold value: ')
+
+        button = input('Press [Y] if threshold is acceptable. Otherwise, enter a new threshold value: ')
+
         if button == 'y' or button == 'Y':
             break
-        elif button == 'r' or button =='R':
-            if threshIndex - 1 >= 0:
-                highThresh = thresh[threshIndex-1]
-                break
-            else:
-                print("Cannot return to previous threshold. Using next threshold value.")
-                threshIndex += 1
-                highThresh = thresh[threshIndex]
-                slice_BW = (slice > lowThresh) & (slice < highThresh)
-                slice_BW = opening(slice_BW, disk(2))
         else:
             try:
-                threshIndex += 1
-                highThresh = thresh[threshIndex]
+                highThresh = float(button)
                 slice_BW = (slice > lowThresh) & (slice < highThresh)
                 slice_BW = opening(slice_BW, disk(2))
+                temp = []
             except:
-                print("No thresholds remaining. Using current threshold value.")
-                break
+                print("Invalid threshold. Continuing loop with current threshold value.")
     
     return float(highThresh)
 
-#Expands image and returns binary array containing the voids in each image slice, depending on whether a light or dark selection is desired
+#Expands image and returns binary array containing the voids in each image slice based on a manually determined threshold value
 def Thresholding(fftFiltered, deltaZ):
     fftFiltered = np.array(fftFiltered)
 
     smooth = gaussian(fftFiltered, sigma=0.5, mode='nearest', truncate=2.0)
-    smooth = (smooth*255).astype(np.uint8) #Converts to uint8 image, makes zoom() much less demanding
+    smooth = (smooth*255).astype(np.uint8)
 
-    print("Expanding image stack and determining thresholds...")
-    smooth = zoom(smooth, zoom=(round(deltaZ), 1, 1), order=1)
+    smooth = ExpandImageStack(smooth, deltaZ)
 
     thresh = threshold_multiotsu(smooth, classes=5)
 
     displayThresh = ', '.join(map(str, thresh))
-    print('Generated threshold values are: {}'.format(displayThresh))
+    print('Generated guideline threshold values are: {}'.format(displayThresh))
 
-    thresh = ThreshFeedback(smooth, thresh, 'pore')
+    thresh = ThreshFeedback(smooth, thresh)
 
     voids = smooth < thresh
             
     return smooth, voids
 
+def AltThreshFeedback(img, originalImg, thresh):
+    dims = img.shape
+
+    slice1 = img[round(dims[0]/5),:,:]
+    slice2 = img[round(dims[0]*2/5),:,:]
+    slice3 = img[round(dims[0]*3/5),:,:]
+    slice4 = img[round(dims[0]*4/5),:,:]
+    slice = np.vstack([np.hstack([slice1, slice2]), np.hstack([slice3, slice4])])
+    
+    slice_BW = slice > thresh[0]
+    slice_BW = opening(slice_BW, disk(2))
+
+    #OriginalSlice used to display generated mask on original image, easier to see effects of the different thresholds.
+    originalSlice1 = originalImg[round(dims[0]/5),:,:]
+    originalSlice2 = originalImg[round(dims[0]*2/5),:,:]
+    originalSlice3 = originalImg[round(dims[0]*3/5),:,:]
+    originalSlice4 = originalImg[round(dims[0]*4/5),:,:]
+    originalSlice = np.vstack([np.hstack([originalSlice1, originalSlice2]), np.hstack([originalSlice3, originalSlice4])])
+
+    while True:
+        temp = Imover(originalSlice, slice_BW, [100, 0, 0])
+
+        plt.imshow(temp)
+        plt.show()
+
+        button = input('Press [Y] if threshold is acceptable. Otherwise, enter a new threshold value: ')
+
+        if button == 'y' or button == 'Y':
+            break
+        else:
+            try:
+                highThresh = float(button)
+                slice_BW = slice > highThresh
+                slice_BW = opening(slice_BW, disk(2))
+                temp = []
+            except:
+                print("Invalid threshold. Continuing loop with current threshold value.")
+    
+    return float(highThresh)
+
+def AltThresholding(fftFiltered):
+    fftFiltered = np.array(fftFiltered)
+
+    smooth = gaussian(fftFiltered, sigma=2.0, mode='nearest', truncate=2.0)
+    smooth = np.array((smooth*255)).astype(np.uint8)
+
+    modifiedSmooth = []
+    for img in fftFiltered:
+        temp = 255 - img
+        temp = cv2.subtract(temp, img)
+        modifiedSmooth.append(temp)
+    modifiedSmooth = np.array(modifiedSmooth)
+
+    thresh = threshold_multiotsu(modifiedSmooth, classes=5)
+
+    displayThresh = ', '.join(map(str, thresh))
+    print('Generated guideline threshold values are: {}'.format(displayThresh))
+
+    thresh = AltThreshFeedback(modifiedSmooth, smooth, thresh)
+
+    voids = smooth < thresh
+
+    return smooth, voids
+
+#Algorithm to clean up the binary array containing pore locations. Removes small pores, fills gaps in pores, and performs a contour fit 
 def EDSThresholdCleaningMask(smooth, voids):
+    smooth = np.array(smooth)
+    voids = np.array(voids)
     dims = smooth.shape
 
     for i in tqdm(range(dims[0]), desc='Removing small pores and filling gaps'):
@@ -385,12 +459,11 @@ def EDSThresholdCleaningMask(smooth, voids):
         voids[i,:,:] = binary_fill_holes(voids[i,:,:])
 
     for i in tqdm(range(dims[0]), desc='Optimizing pore contours for best fit'):
-        voids[i,:,:] = active_contour(smooth[i,:,:], voids[i,:,:], max_iterations=20, alpha=0.05, beta=0.5, gamma=0.1)
-        #Replace with morphological snakes
+        voids[i,:,:] = morphological_chan_vese(smooth[i,:,:], 20, voids[i,:,:])
     
     return voids
 
-
+#Does not work at all. Needs significant rework.
 def BubbleThresholdCleaningMask(smooth, voids):
     dims = smooth.shape
     AoI = StackCropping(smooth)
@@ -408,15 +481,29 @@ def BubbleThresholdCleaningMask(smooth, voids):
     for i in range(dims[2]):
         voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
 
-    voids = active_contour(smooth, voids, max_iterations=100, boundary_condition='edge')
+    voids = morphological_chan_vese(smooth, voids, max_iterations=100, boundary_condition='edge')
 
     for i in range(dims[2]):
         voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
 
     voids = opening(voids, ball(1))
     voids = voids.astype(bool)
-    
-def SaveImages(images, folderName):
+
+#Creates a very rudimentary 3D reconstruction of a binary 3D image stack using Mayavi
+def BasicReconstruction(voids):
+    #Assumes voids is binary:
+    voids = np.array(voids).astype(float)
+
+    print('Creating 3D display...')
+    mlab.figure()
+
+    mlab.contour3d(voids, colormap='binary')
+
+    mlab.show()
+
+def SaveImages(images, folderName, outDir):
+    images = np.array(images)
+
     if not os.path.exists(outDir):
         print("Invalid Directory")
     else:
@@ -425,11 +512,9 @@ def SaveImages(images, folderName):
         if not os.path.exists(folderPath):
             os.makedirs(folderPath)
         
-        # images = np.array(images).astype(np.uint8)
-
-        for i, image in enumerate(images):
+        for i, image in enumerate(tqdm(images, desc='Saving Images')):
             fileName = f"{folderName}_{i}.tif"
-            img = Image.fromarray(image, 'L')
+            img = Image.fromarray(image)
             img.save(os.path.join(folderPath, fileName))
 
 def main():
@@ -439,19 +524,22 @@ def main():
     outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
     saveImages = False
 
-    # images = ReadImages(inDir, ".tif")
-    # rotated = StackRotate(images, tiltAngle=-3.5)
-    # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
-    # cropped = StackCropping(shifted)
-    # filtered = NoiseReduction(cropped)
-    # fftFiltered = FFT_Filtering(filtered)
+    depth = 59/4.56
+    threshStyle = 'EDS'
 
-    # depth = 59/4.56
-    # fftFiltered = ReadImages(inDir, ".tif")
-    # smooth, voids = DetermineThreshold(fftFiltered, depth)
-
-    filtered = ReadImages(inDir, ".tif")
+    images = ReadImages(inDir, ".tif")
+    rotated = StackRotate(images, tiltAngle=-3.5)
+    shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
+    cropped = StackCropping(shifted)
+    filtered = NoiseReduction(cropped)
     fftFiltered = FFT_Filtering(filtered)
+    smooth, voids = Thresholding(fftFiltered, depth)
+
+    if threshStyle == 'EDS':
+        voids = EDSThresholdCleaningMask(smooth, voids)
+    elif threshStyle == 'bubbles':
+        voids = BubbleThresholdCleaningMask(smooth, voids)
+
 
 if __name__ == "__main__":
     main()
