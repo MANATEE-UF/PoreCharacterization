@@ -9,8 +9,8 @@ from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 from matplotlib.widgets import RectangleSelector
 from PIL import Image
 from scipy.ndimage import zoom, binary_fill_holes
-from skimage.filters import gaussian, threshold_multiotsu
-from skimage.morphology import opening, closing, disk, ball
+from skimage.filters import gaussian, threshold_multiotsu, threshold_sauvola
+from skimage.morphology import binary_opening, binary_closing, binary_dilation, disk, ball
 from skimage.segmentation import morphological_chan_vese
 from tqdm import tqdm
 from mayavi import mlab
@@ -20,11 +20,7 @@ from mayavi import mlab
 def ReadImages(inDir, fileExtension):
     image_list = os.listdir(inDir)
     image_list = [file for file in image_list if file.endswith(fileExtension)]
-
-    def ExtractImgNumber(filename):
-        return int(filename.split('_')[1].split('.tif')[0])
-    
-    image_list.sort(key=ExtractImgNumber)
+    image_list.sort()
     
     images = []
     for image_file in image_list:
@@ -38,7 +34,7 @@ def ReadImages(inDir, fileExtension):
 
 #Rotates each image in the image stack about its center by a given angle
 #Note: Positive tiltAngle corresponds to CCW, Negative tiltAngle corresponds to CW
-def StackRotate(images, tiltAngle, saveImages=False):
+def StackRotate(images, tiltAngle):
     rotated = []
 
     for i, image in enumerate(images):
@@ -49,9 +45,6 @@ def StackRotate(images, tiltAngle, saveImages=False):
             rotated.append(rotated_image)
         else:
             print("Warning: Skipping image at index {} (Returned None)".format(i))
-
-    if saveImages is True:
-        SaveImages(rotated, "Rotated")
 
     return rotated
 
@@ -74,7 +67,7 @@ def GetYCoord(image):
 
 #Vertically shifts each image in the image stack until they are aligned with the first image slice in the stack
 #Note: This function will manually compute the shift margin interactively unless a known shift margin is specified
-def StackVerticalShift(rotated, shift=None, saveImages=False):
+def StackVerticalShift(rotated, shift=None):
     if shift == None:
         shiftAgain = True
 
@@ -148,9 +141,6 @@ def StackVerticalShift(rotated, shift=None, saveImages=False):
             shiftedImage = transform.warp(image, translation)
             shiftedImage = (shiftedImage*255).astype(np.uint8)
             shifted.append(shiftedImage)
-    
-    if saveImages is True:
-        SaveImages(shifted, "Shifted")
 
     return shifted
 
@@ -169,7 +159,7 @@ def GetRectangleCoords(image):
 
     return xmin, ymin, xmax, ymax
 
-def StackCropping(shifted, saveImages=False):
+def StackCropping(shifted):
     shifted1st = shifted[0]
 
     print("Select rectangular AOI")
@@ -180,12 +170,9 @@ def StackCropping(shifted, saveImages=False):
         cropped_image = image[y1:y2, x1:x2]
         cropped.append(cropped_image)
 
-    if saveImages is True:
-        SaveImages(cropped, "Cropped")
-
     return cropped
 
-def NoiseReduction(cropped, saveImages=False):
+def NoiseReduction(cropped):
     filtered = []
 
     for i in range(len(cropped)):
@@ -194,9 +181,6 @@ def NoiseReduction(cropped, saveImages=False):
         filteredImg = wiener(img, (5,5))
         filteredImg = (filteredImg * 255).astype(np.uint8)
         filtered.append(filteredImg)
-
-    if saveImages is True:
-        SaveImages(filtered, "Filtered")
 
     return filtered
 
@@ -222,13 +206,10 @@ def CreateDoubleRectangleMask(image):
     mask[R1y1:R1y2+1, R1x1:R1x2+1] = True
     mask[R2y1:R2y2+1, R2x1:R2x2+1] = True
 
-    print(type(mask))
-    plt.imshow(mask, cmap='gray')
-    plt.show()
     return mask
 
 #Performs Fourier Fast Transform filtering in the frequency domain of each image in the image stack to remove curtaining effects
-def FFT_Filtering(filtered, saveImages=False):
+def FFT_Filtering(filtered):
     applyFilterAgain = True
 
     while applyFilterAgain is True:
@@ -283,9 +264,6 @@ def FFT_Filtering(filtered, saveImages=False):
     normalizedRealImages = (realImages - min) / (max - min) * 255
     fftFiltered = normalizedRealImages.astype(np.uint8)
 
-    if saveImages is True:
-        SaveImages(fftFiltered, "FFTFiltered")
-
     return fftFiltered
 
 #Expands an image stack about the number of image slices in the stack by a factor of deltaZ 
@@ -307,9 +285,9 @@ def Imover(inputImage, mask, color=[255, 255, 255]):
             outBlue = np.copy(formattedImage)
         elif formattedImage.ndim == 3:
             #Input is RGB truecolor
-            outRed = np.copy(formattedImage[:,:,0])
-            outGreen = np.copy(formattedImage[:,:,1])
-            outBlue = np.copy(formattedImage[:,:,2])
+            outRed = np.copy(formattedImage[0])
+            outGreen = np.copy(formattedImage[1])
+            outBlue = np.copy(formattedImage[2])
     except:
         print('Invalid image entered for Imover. Only grayscale or RGB images are accepted.')
         raise
@@ -323,7 +301,6 @@ def Imover(inputImage, mask, color=[255, 255, 255]):
 
     return out
 
-
 #Manually determines what threshold is appropriate given 4 threshold values
 def ThreshFeedback(img, thresh):
     lowThresh = 0
@@ -333,14 +310,14 @@ def ThreshFeedback(img, thresh):
 
     #indexing method is smooth[z,x,y]
 
-    slice1 = img[round(dims[0]/5),:,:]
-    slice2 = img[round(dims[0]*2/5),:,:]
-    slice3 = img[round(dims[0]*3/5),:,:]
-    slice4 = img[round(dims[0]*4/5),:,:]
+    slice1 = img[round(dims[0]/5)]
+    slice2 = img[round(dims[0]*2/5)]
+    slice3 = img[round(dims[0]*3/5)]
+    slice4 = img[round(dims[0]*4/5)]
 
     slice = np.vstack([np.hstack([slice1, slice2]), np.hstack([slice3, slice4])])
     slice_BW = (slice > lowThresh) & (slice < highThresh)
-    slice_BW = opening(slice_BW, disk(2))
+    slice_BW = binary_opening(slice_BW, disk(2))
 
     while True:
         temp = Imover(slice, slice_BW, [100, 0, 0])
@@ -356,7 +333,7 @@ def ThreshFeedback(img, thresh):
             try:
                 highThresh = float(button)
                 slice_BW = (slice > lowThresh) & (slice < highThresh)
-                slice_BW = opening(slice_BW, disk(2))
+                slice_BW = binary_opening(slice_BW, disk(2))
                 temp = []
             except:
                 print("Invalid threshold. Continuing loop with current threshold value.")
@@ -386,20 +363,20 @@ def Thresholding(fftFiltered, deltaZ):
 def AltThreshFeedback(img, originalImg, thresh):
     dims = img.shape
 
-    slice1 = img[round(dims[0]/5),:,:]
-    slice2 = img[round(dims[0]*2/5),:,:]
-    slice3 = img[round(dims[0]*3/5),:,:]
-    slice4 = img[round(dims[0]*4/5),:,:]
+    slice1 = img[round(dims[0]/5)]
+    slice2 = img[round(dims[0]*2/5)]
+    slice3 = img[round(dims[0]*3/5)]
+    slice4 = img[round(dims[0]*4/5)]
     slice = np.vstack([np.hstack([slice1, slice2]), np.hstack([slice3, slice4])])
     
     slice_BW = slice > thresh[0]
-    slice_BW = opening(slice_BW, disk(2))
+    slice_BW = binary_opening(slice_BW, disk(2))
 
     #OriginalSlice used to display generated mask on original image, easier to see effects of the different thresholds.
-    originalSlice1 = originalImg[round(dims[0]/5),:,:]
-    originalSlice2 = originalImg[round(dims[0]*2/5),:,:]
-    originalSlice3 = originalImg[round(dims[0]*3/5),:,:]
-    originalSlice4 = originalImg[round(dims[0]*4/5),:,:]
+    originalSlice1 = originalImg[round(dims[0]/5)]
+    originalSlice2 = originalImg[round(dims[0]*2/5)]
+    originalSlice3 = originalImg[round(dims[0]*3/5)]
+    originalSlice4 = originalImg[round(dims[0]*4/5)]
     originalSlice = np.vstack([np.hstack([originalSlice1, originalSlice2]), np.hstack([originalSlice3, originalSlice4])])
 
     while True:
@@ -416,21 +393,23 @@ def AltThreshFeedback(img, originalImg, thresh):
             try:
                 highThresh = float(button)
                 slice_BW = slice > highThresh
-                slice_BW = opening(slice_BW, disk(2))
+                slice_BW = binary_opening(slice_BW, disk(2))
                 temp = []
             except:
                 print("Invalid threshold. Continuing loop with current threshold value.")
     
     return float(highThresh)
 
-def AltThresholding(fftFiltered):
+def AltThresholding(fftFiltered, deltaZ):
     fftFiltered = np.array(fftFiltered)
 
-    smooth = gaussian(fftFiltered, sigma=2.0, mode='nearest', truncate=2.0)
+    smooth = gaussian(fftFiltered, sigma=0.5, mode='nearest', truncate=2.0)
     smooth = np.array((smooth*255)).astype(np.uint8)
 
+    smooth = ExpandImageStack(smooth, deltaZ)
+
     modifiedSmooth = []
-    for img in fftFiltered:
+    for img in smooth:
         temp = 255 - img
         temp = cv2.subtract(temp, img)
         modifiedSmooth.append(temp)
@@ -447,47 +426,92 @@ def AltThresholding(fftFiltered):
 
     return smooth, voids
 
+def EnhanceContrast(img, lowerPercentile, upperPercentile):
+    img = np.array(img)
+    lowerLimit, upperLimit = np.percentile(img, [lowerPercentile * 100, upperPercentile * 100])
+    stretchedImg = np.clip((img - lowerLimit) / (upperLimit - lowerLimit), 0, 1)
+    stretchedImg = np.array(stretchedImg*255).astype(np.uint8)
+
+    return stretchedImg
+
+def SauvolaThresholding(fftFiltered, contrastLowerPercentile, contrastUpperPercentile, sigma, threshSize):
+    smooth = np.copy(fftFiltered)
+    
+    voids = []
+    for i, img in enumerate(tqdm(smooth, desc='Applying Image Threshold')):
+        originalImg = img
+        img = EnhanceContrast(img, contrastLowerPercentile, contrastUpperPercentile)
+        img = gaussian(img, sigma=sigma, mode='nearest', truncate=2.0)
+        img = np.array(img*255).astype(np.uint8)
+        thresh = threshold_sauvola(img, window_size=threshSize)
+        void = originalImg > thresh
+        voids.append(void)
+    
+    return smooth, np.array(voids)
+
+def EdgeDetectionThresholding(fftFiltered, contrastLowerPercentile, contrastUpperPercentile, sigma, thresh1, thresh2):
+    voids = []
+    for i, img in enumerate(tqdm(fftFiltered, desc='Applying Image Threshold')):
+        originalImg = img
+        temp = EnhanceContrast(img, contrastLowerPercentile, contrastUpperPercentile)
+        temp = gaussian(temp, sigma=sigma, mode='nearest', truncate=2.0)
+        temp = np.array(temp*255).astype(np.uint8)
+        void = cv2.Canny(temp, thresh1, thresh2)
+        void = binary_dilation(void, disk(1))
+        void = morphological_chan_vese(originalImg, 20, void)
+        voids.append(void)
+
+    return np.array(voids)
+
 #Algorithm to clean up the binary array containing pore locations. Removes small pores, fills gaps in pores, and performs a contour fit 
-def EDSThresholdCleaningMask(smooth, voids):
+def ThresholdCleaningMask(smooth, voids, imageStack = True):
     smooth = np.array(smooth)
     voids = np.array(voids)
     dims = smooth.shape
-
-    for i in tqdm(range(dims[0]), desc='Removing small pores and filling gaps'):
-        voids[i,:,:] = opening(voids[i,:,:], disk(2))
-        voids[i,:,:] = closing(voids[i,:,:], disk(5))
-        voids[i,:,:] = binary_fill_holes(voids[i,:,:])
-
-    for i in tqdm(range(dims[0]), desc='Optimizing pore contours for best fit'):
-        voids[i,:,:] = morphological_chan_vese(smooth[i,:,:], 20, voids[i,:,:])
     
+    if imageStack == True:
+        for i in tqdm(range(dims[0]), desc='Optimizing pore contours for best fit'):
+            voids[i] = binary_opening(voids[i], disk(1))
+            voids[i] = binary_fill_holes(voids[i])
+            voids[i] = binary_closing(voids[i], disk(3))
+            voids[i] = binary_dilation(voids[i], disk(1))
+            voids[i] = morphological_chan_vese(smooth[i], 20, voids[i])
+        voids = binary_fill_holes(voids)
+    else: #Single image given, for threshold testing purposes
+        voids = binary_opening(voids, disk(1))
+        voids = binary_fill_holes(voids)
+        voids = binary_closing(voids, disk(3))
+        voids = binary_dilation(voids, disk(1))
+        voids = morphological_chan_vese(smooth, 20, voids)
+        voids = binary_fill_holes(voids)
+
     return voids
 
-#Does not work at all. Needs significant rework.
-def BubbleThresholdCleaningMask(smooth, voids):
-    dims = smooth.shape
-    AoI = StackCropping(smooth)
+# #Does not work at all. Needs significant rework.
+# def BubbleThresholdCleaningMask(smooth, voids):
+#     dims = smooth.shape
+#     AoI = StackCropping(smooth)
 
-    for i in range(dims[2]):
-        temp = ~cv2.threshold(smooth[:, :, i], 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-        temp = cv2.bitwise_not(temp)
-        temp[~AoI] = 0
-        voids[:, :, i] = temp
+#     for i in range(dims[2]):
+#         temp = ~cv2.threshold(smooth[:, :, i], 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+#         temp = cv2.bitwise_not(temp)
+#         temp[~AoI] = 0
+#         voids[:, :, i] = temp
 
-    voids = opening(voids, ball(1))
-    voids = cv2.fillPoly(np.uint8(voids), [np.array(AoI, dtype=np.int32)], 255)
-    voids = closing(voids, ball(3))
+#     voids = opening(voids, ball(1))
+#     voids = cv2.fillPoly(np.uint8(voids), [np.array(AoI, dtype=np.int32)], 255)
+#     voids = closing(voids, ball(3))
 
-    for i in range(dims[2]):
-        voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
+#     for i in range(dims[2]):
+#         voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
 
-    voids = morphological_chan_vese(smooth, voids, max_iterations=100, boundary_condition='edge')
+#     voids = morphological_chan_vese(smooth, voids, max_iterations=100, boundary_condition='edge')
 
-    for i in range(dims[2]):
-        voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
+#     for i in range(dims[2]):
+#         voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
 
-    voids = opening(voids, ball(1))
-    voids = voids.astype(bool)
+#     voids = opening(voids, ball(1))
+#     voids = voids.astype(bool)
 
 #Creates a very rudimentary 3D reconstruction of a binary 3D image stack using Mayavi
 def BasicReconstruction(voids):
@@ -504,42 +528,40 @@ def BasicReconstruction(voids):
 def SaveImages(images, folderName, outDir):
     images = np.array(images)
 
+    class DirectorNotFoundError(Exception):
+        pass
+
     if not os.path.exists(outDir):
-        print("Invalid Directory")
+        raise DirectorNotFoundError(f'Invalid directory. Directory {outDir} does not exist.')
+    
     else:
         folderPath = os.path.join(outDir, folderName)    
         
         if not os.path.exists(folderPath):
             os.makedirs(folderPath)
         
+        numDigits = len(str(len(images)))
+
         for i, image in enumerate(tqdm(images, desc='Saving Images')):
-            fileName = f"{folderName}_{i}.tif"
+            fileName = f'{folderName}{i:0{numDigits}}.tif'
             img = Image.fromarray(image)
             img.save(os.path.join(folderPath, fileName))
+        
 
 def main():
-    global inDir, outDir, saveImages
-    # inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
-    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/Filtered"
+    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
+    # inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/Filtered"
     outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
-    saveImages = False
 
     depth = 59/4.56
     threshStyle = 'EDS'
 
     images = ReadImages(inDir, ".tif")
-    rotated = StackRotate(images, tiltAngle=-3.5)
+    rotated = StackRotate(images, tiltAngle=-3.2)
     shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
     cropped = StackCropping(shifted)
     filtered = NoiseReduction(cropped)
     fftFiltered = FFT_Filtering(filtered)
-    smooth, voids = Thresholding(fftFiltered, depth)
-
-    if threshStyle == 'EDS':
-        voids = EDSThresholdCleaningMask(smooth, voids)
-    elif threshStyle == 'bubbles':
-        voids = BubbleThresholdCleaningMask(smooth, voids)
-
 
 if __name__ == "__main__":
     main()
