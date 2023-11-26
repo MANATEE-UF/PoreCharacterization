@@ -1,5 +1,5 @@
 import numpy as np
-from skimage import transform
+from skimage import transform, measure
 import matplotlib.pyplot as plt
 from mpl_point_clicker import clicker
 import os
@@ -14,6 +14,7 @@ from skimage.morphology import binary_opening, binary_closing, binary_dilation, 
 from skimage.segmentation import morphological_chan_vese
 from tqdm import tqdm
 from mayavi import mlab
+from stl import mesh
 
 #Reads images from a given directory of images. Does not read any files that do not have the specified file extension
 #Assumes image filenames are in the format: filename_#.fileExtension where # is the number of the image
@@ -33,14 +34,13 @@ def ReadImages(inDir, fileExtension):
     return images
 
 #Rotates each image in the image stack about its center by a given angle
-#Note: Positive tiltAngle corresponds to CCW, Negative tiltAngle corresponds to CW
-def StackRotate(images, tiltAngle):
+def StackRotate(images, tiltAngleCCW):
     rotated = []
 
     for i, image in enumerate(images):
         if image is not None:
             h, w = image.shape[:2]
-            rotationMatrix = cv2.getRotationMatrix2D((w/2, h/2), tiltAngle, 1.0)
+            rotationMatrix = cv2.getRotationMatrix2D((w/2, h/2), tiltAngleCCW, 1.0)
             rotated_image = cv2.warpAffine(image, rotationMatrix, (w, h))
             rotated.append(rotated_image)
         else:
@@ -525,6 +525,20 @@ def BasicReconstruction(voids):
 
     mlab.show()
 
+#Generates a mesh of the pore structure using the method of marching cubes from scikit image and numpy-stl
+def CreateMeshReconstruction(voids):
+    voids[0,:,:] = False
+    voids[-1,:,:] = False
+    
+    verts, faces, normals, values = measure.marching_cubes(voids)
+
+    obj = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
+    
+    for i, f in enumerate(faces):
+        obj.vectors[i] = verts[f]
+    
+    return obj
+
 def SaveImages(images, folderName, outDir):
     images = np.array(images)
 
@@ -546,15 +560,25 @@ def SaveImages(images, folderName, outDir):
             fileName = f'{folderName}{i:0{numDigits}}.tif'
             img = Image.fromarray(image)
             img.save(os.path.join(folderPath, fileName))
-        
+
+#Creates and Saves STL file out of 3D mesh
+def SaveMeshAsSTL(mesh3D, fileName, folderName, outDir):
+    if not os.path.exists(outDir):
+        raise ValueError(f'Invalid directory. Directory {outDir} does not exist.')
+    else:
+        folderPath = os.path.join(outDir, folderName)
+
+        if not os.path.exists(folderPath):
+            os.makedirs(folderPath)
+
+        fileName = f'{fileName}.stl'
+        mesh3D.save(os.path.join(folderPath, fileName))    
 
 def main():
     inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
-    # inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/Filtered"
     outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
 
     depth = 59/4.56
-    threshStyle = 'EDS'
 
     images = ReadImages(inDir, ".tif")
     rotated = StackRotate(images, tiltAngle=-3.2)
@@ -562,6 +586,9 @@ def main():
     cropped = StackCropping(shifted)
     filtered = NoiseReduction(cropped)
     fftFiltered = FFT_Filtering(filtered)
+    voids = EdgeDetectionThresholding(fftFiltered, depth, 0.01, 0.99, 2.0, 50, 100)
+    reconstruction = CreateMeshReconstruction(voids)
+    SaveMeshAsSTL(reconstruction, 'PoreReconstruction', '3D_Reconstruction', outDir)
 
 if __name__ == "__main__":
     main()
