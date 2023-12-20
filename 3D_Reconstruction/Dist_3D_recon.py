@@ -15,6 +15,8 @@ from skimage.segmentation import morphological_chan_vese
 from tqdm import tqdm
 from mayavi import mlab
 from stl import mesh
+import meshlib.mrmeshpy as mr
+import meshlib.mrmeshnumpy as mrnumpy
 
 #Reads images from a given directory of images. Does not read any files that do not have the specified file extension
 #Assumes image filenames are in the format: filename_#.fileExtension where # is the number of the image
@@ -434,11 +436,12 @@ def EnhanceContrast(img, lowerPercentile, upperPercentile):
 
     return stretchedImg
 
-def SauvolaThresholding(fftFiltered, contrastLowerPercentile, contrastUpperPercentile, sigma, threshSize):
+def SauvolaThresholding(fftFiltered, deltaZ, contrastLowerPercentile, contrastUpperPercentile, sigma, threshSize):
     smooth = np.copy(fftFiltered)
-    
+    smooth = ExpandImageStack(smooth, deltaZ)
+
     voids = []
-    for i, img in enumerate(tqdm(smooth, desc='Applying Image Threshold')):
+    for i, img in enumerate(tqdm(smooth, desc='Applying Sauvola Image Threshold')):
         originalImg = img
         img = EnhanceContrast(img, contrastLowerPercentile, contrastUpperPercentile)
         img = gaussian(img, sigma=sigma, mode='nearest', truncate=2.0)
@@ -449,9 +452,12 @@ def SauvolaThresholding(fftFiltered, contrastLowerPercentile, contrastUpperPerce
     
     return smooth, np.array(voids)
 
-def EdgeDetectionThresholding(fftFiltered, contrastLowerPercentile, contrastUpperPercentile, sigma, thresh1, thresh2):
+def EdgeDetectionThresholding(fftFiltered, deltaZ, contrastLowerPercentile, contrastUpperPercentile, sigma, thresh1, thresh2):
+    smooth = np.copy(fftFiltered)
+    smooth = ExpandImageStack(smooth, deltaZ)
+
     voids = []
-    for i, img in enumerate(tqdm(fftFiltered, desc='Applying Image Threshold')):
+    for i, img in enumerate(tqdm(smooth, desc='Applying Edge Detection Image Threshold')):
         originalImg = img
         temp = EnhanceContrast(img, contrastLowerPercentile, contrastUpperPercentile)
         temp = gaussian(temp, sigma=sigma, mode='nearest', truncate=2.0)
@@ -487,32 +493,6 @@ def ThresholdCleaningMask(smooth, voids, imageStack = True):
 
     return voids
 
-# #Does not work at all. Needs significant rework.
-# def BubbleThresholdCleaningMask(smooth, voids):
-#     dims = smooth.shape
-#     AoI = StackCropping(smooth)
-
-#     for i in range(dims[2]):
-#         temp = ~cv2.threshold(smooth[:, :, i], 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-#         temp = cv2.bitwise_not(temp)
-#         temp[~AoI] = 0
-#         voids[:, :, i] = temp
-
-#     voids = opening(voids, ball(1))
-#     voids = cv2.fillPoly(np.uint8(voids), [np.array(AoI, dtype=np.int32)], 255)
-#     voids = closing(voids, ball(3))
-
-#     for i in range(dims[2]):
-#         voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
-
-#     voids = morphological_chan_vese(smooth, voids, max_iterations=100, boundary_condition='edge')
-
-#     for i in range(dims[2]):
-#         voids[:, :, i] = cv2.fillPoly(np.uint8(voids[:, :, i]), [np.array(AoI, dtype=np.int32)], 255)
-
-#     voids = opening(voids, ball(1))
-#     voids = voids.astype(bool)
-
 #Creates a very rudimentary 3D reconstruction of a binary 3D image stack using Mayavi
 def BasicReconstruction(voids):
     #Assumes voids is binary:
@@ -525,29 +505,52 @@ def BasicReconstruction(voids):
 
     mlab.show()
 
-#Generates a mesh of the pore structure using the method of marching cubes from scikit image and numpy-stl
-def CreateMeshReconstruction(voids):
-    voids[0,:,:] = False
-    voids[-1,:,:] = False
+def LoopDecimation(obj, scaleFactor, initFaces):
+    numRemainingFaces = initFaces
+    prevNumRemainingFaces = initFaces
+    facesDeleted = 0
+    vertsDeleted = 0
+    target = initFaces * scaleFactor
+
+    settings = mr.DecimateSettings()
+    settings.maxError = 0.5
+    while numRemainingFaces > target:
+        results = mr.decimateMesh(obj, settings) #Results contains information about the performed decimate funciton, obj is actually changed by the function
+        facesDeleted += results.facesDeleted
+        vertsDeleted += results.vertsDeleted
+        numRemainingFaces -= results.facesDeleted
+        if numRemainingFaces == prevNumRemainingFaces:
+            settings.maxError += 0.1
+        prevNumRemainingFaces = numRemainingFaces
+
+    return obj, facesDeleted, vertsDeleted    
     
+#Generates a mesh of the pore structure using the method of marching cubes from scikit image and numpy-stl
+def CreateMeshReconstruction(voids, scaleFactor=None, printResults=False):
+    voids = np.pad(voids, pad_width=((0,0), (1,1), (1,1)), mode='constant', constant_values=False)
+    edgeSlice = np.full_like(voids[:1, :, :], False)
+    voids = np.concatenate([edgeSlice, voids], axis=0)
+    voids = np.concatenate([voids, edgeSlice], axis=0)
+
     verts, faces, normals, values = measure.marching_cubes(voids)
 
-    obj = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
-    
-    for i, f in enumerate(faces):
-        obj.vectors[i] = verts[f]
-    
+    obj = mrnumpy.meshFromFacesVerts(faces, verts)
+
+    if scaleFactor != None:
+        obj, facesDeleted, vertsDeleted = LoopDecimation(obj, scaleFactor, len(faces))
+
+        if printResults:
+            print(f"{facesDeleted} faces deleted.")
+            print(f"{vertsDeleted} vertices deleted.")
+
     return obj
 
 def SaveImages(images, folderName, outDir):
     images = np.array(images)
 
-    class DirectorNotFoundError(Exception):
-        pass
-
     if not os.path.exists(outDir):
-        raise DirectorNotFoundError(f'Invalid directory. Directory {outDir} does not exist.')
-    
+        raise ValueError(f'Invalid directory. Directory {outDir} does not exist.')
+
     else:
         folderPath = os.path.join(outDir, folderName)    
         
@@ -562,7 +565,7 @@ def SaveImages(images, folderName, outDir):
             img.save(os.path.join(folderPath, fileName))
 
 #Creates and Saves STL file out of 3D mesh
-def SaveMeshAsSTL(mesh3D, fileName, folderName, outDir):
+def SaveMeshAsSTL(obj, fileName, folderName, outDir):
     if not os.path.exists(outDir):
         raise ValueError(f'Invalid directory. Directory {outDir} does not exist.')
     else:
@@ -572,23 +575,33 @@ def SaveMeshAsSTL(mesh3D, fileName, folderName, outDir):
             os.makedirs(folderPath)
 
         fileName = f'{fileName}.stl'
-        mesh3D.save(os.path.join(folderPath, fileName))    
+        mr.saveMesh(obj, mr.Path(os.path.join(folderPath, fileName))) 
 
 def main():
     inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
+    fftInDir ="C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/FFTFiltered"
     outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
 
     depth = 59/4.56
 
-    images = ReadImages(inDir, ".tif")
-    rotated = StackRotate(images, tiltAngle=-3.2)
-    shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
-    cropped = StackCropping(shifted)
-    filtered = NoiseReduction(cropped)
-    fftFiltered = FFT_Filtering(filtered)
+    # images = ReadImages(inDir, ".tif")
+    # rotated = StackRotate(images, tiltAngle=-3.2)
+    # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
+    # cropped = StackCropping(shifted)
+    # filtered = NoiseReduction(cropped)
+    # fftFiltered = FFT_Filtering(filtered)
+
+    fftFiltered = ReadImages(fftInDir, ".tif")
+
+    testBatchSize = 1
+    batchSize = round(len(fftFiltered)*testBatchSize)
+    fftFiltered = np.copy(fftFiltered[:batchSize])
+
     voids = EdgeDetectionThresholding(fftFiltered, depth, 0.01, 0.99, 2.0, 50, 100)
-    reconstruction = CreateMeshReconstruction(voids)
-    SaveMeshAsSTL(reconstruction, 'PoreReconstruction', '3D_Reconstruction', outDir)
+    
+    reconstruction = CreateMeshReconstruction(voids, 0.01, True)
+
+    SaveMeshAsSTL(reconstruction, 'Stack3_DReduced', 'PoreReconstruction', outDir)
 
 if __name__ == "__main__":
     main()
