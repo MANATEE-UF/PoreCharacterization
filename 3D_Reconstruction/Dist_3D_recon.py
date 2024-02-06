@@ -503,14 +503,14 @@ def BasicReconstruction(voids):
 
     mlab.contour3d(voids, colormap='binary')
 
-    mlab.show()
-
-def LoopDecimation(obj, scaleFactor, initFaces):
+    mlab.show()   
+    
+def LoopDecimation(obj, reductionFactor, initFaces):
     numRemainingFaces = initFaces
     prevNumRemainingFaces = initFaces
     facesDeleted = 0
     vertsDeleted = 0
-    target = initFaces * scaleFactor
+    target = initFaces * reductionFactor
 
     settings = mr.DecimateSettings()
     settings.maxError = 0.5
@@ -524,26 +524,59 @@ def LoopDecimation(obj, scaleFactor, initFaces):
         prevNumRemainingFaces = numRemainingFaces
 
     return obj, facesDeleted, vertsDeleted    
-    
-#Generates a mesh of the pore structure using the method of marching cubes from scikit image and numpy-stl
-def CreateMeshReconstruction(voids, scaleFactor=None, printResults=False):
+
+def PadVoids(voids):
     voids = np.pad(voids, pad_width=((0,0), (1,1), (1,1)), mode='constant', constant_values=False)
     edgeSlice = np.full_like(voids[:1, :, :], False)
     voids = np.concatenate([edgeSlice, voids], axis=0)
     voids = np.concatenate([voids, edgeSlice], axis=0)
 
+    return voids
+
+#Generates a mesh of the pore structure using the method of marching cubes from scikit image and numpy-stl
+def CreateMeshReconstruction(voids, reductionFactor=None, printResults=False):
+    voids = PadVoids(voids)
+
     verts, faces, normals, values = measure.marching_cubes(voids)
 
     obj = mrnumpy.meshFromFacesVerts(faces, verts)
 
-    if scaleFactor != None:
-        obj, facesDeleted, vertsDeleted = LoopDecimation(obj, scaleFactor, len(faces))
+    if reductionFactor != None:
+        obj, facesDeleted, vertsDeleted = LoopDecimation(obj, reductionFactor, len(faces))
 
         if printResults:
             print(f"{facesDeleted} faces deleted.")
             print(f"{vertsDeleted} vertices deleted.")
 
     return obj
+
+def AltDecimation(obj, reductionFactor, initFaces):
+    target = round((1 - reductionFactor) * initFaces)
+
+    settings = mr.DecimateSettings()
+    settings.maxDeletedFaces = target
+    settings.maxError = 100
+    results = mr.decimateMesh(obj, settings) #Results contains information about the performed decimate funciton, obj is actually changed by the function
+    facesDeleted = results.facesDeleted
+    vertsDeleted = results.vertsDeleted
+
+    return obj, facesDeleted, vertsDeleted
+
+def AltCreateMeshReconstruction(voids, reductionFactor=None, printResults=False):
+    voids = PadVoids(voids)
+
+    verts, faces, normals, values = measure.marching_cubes(voids)
+
+    obj = mrnumpy.meshFromFacesVerts(faces, verts)
+
+    if reductionFactor != None:
+        obj, facesDeleted, vertsDeleted = AltDecimation(obj, reductionFactor, len(faces))
+
+        if printResults:
+            print(f"{facesDeleted} faces deleted.")
+            print(f"{vertsDeleted} vertices deleted.")
+
+    return obj 
 
 def SaveImages(images, folderName, outDir):
     images = np.array(images)
@@ -599,9 +632,16 @@ def main():
 
     voids = EdgeDetectionThresholding(fftFiltered, depth, 0.01, 0.99, 2.0, 50, 100)
     
-    reconstruction = CreateMeshReconstruction(voids, 0.01, True)
+    # reconstruction = CreateMeshReconstruction(voids, 0.01, True)
+    # altReconstruction = AltCreateMeshReconstruction(voids, 0.01, True)
 
-    SaveMeshAsSTL(reconstruction, 'Stack3_DReduced', 'PoreReconstruction', outDir)
+    SaveImages(voids, 'PoreReconstructionImageStack', outDir)
+
+    voids = PadVoids(voids)
+
+    SaveImages(voids, 'PoreReconstructionImageStackPadded', outDir)
+
+    # SaveMeshAsSTL(altReconstruction, 'Stack3_DReducedALT', 'PoreReconstructionSTL', outDir)
 
 if __name__ == "__main__":
     main()
