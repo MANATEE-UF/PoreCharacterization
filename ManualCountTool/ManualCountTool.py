@@ -46,10 +46,12 @@ class PixelMap:
         self.gridCenters = []
         self.gridCenters2D = None
 
+        if np.max(image) <= 1.0:
+            image *= 255
+
         for i in range(self.rows):
             for j in range(self.cols):
                 self.pixels[i][j] = Pixel(image[i][j], image[i][j], image[i][j], i, j)
-    
     # Overlay grid crosses onto pixel map
     def OverlayGrid(self, numGridPoints):
         heightToWidthRatio = self.rows / self.cols
@@ -126,6 +128,17 @@ class PixelMap:
         plt.imshow(newImage)
         plt.show()
 
+    # Save pixel map image
+    def SaveImage(self):
+        saveArray = np.zeros((self.rows, self.cols, 3))
+        for i in range(self.rows):
+            for j in range(self.cols):
+                saveArray[i][j][0] = self.pixels[i][j].r / 255
+                saveArray[i][j][1] = self.pixels[i][j].g / 255
+                saveArray[i][j][2] = self.pixels[i][j].b / 255
+        
+        plt.imsave("test.png", saveArray)
+
     # Recursive function to change color
     # Changes all connecting pixel matching color of base pixel
     def ChangeConnectingColor(self, row, col, newColor):
@@ -189,6 +202,32 @@ class PixelMap:
             plt.close("all")
 
             self.ChangeGridColor(gridIndex, (0, 255, 0))
+
+    # Gets values for translating grid in order to get error estimations
+    def GetGridTranslationValues(self, numberOfTranslations):
+        topLeftGridPixel = self.gridCenters2D[0][0]
+        topRightGridPixel = self.gridCenters2D[0][-1]
+        bottomLeftGridPixel = self.gridCenters2D[-1][0]
+        bottomRightGridPixel = self.gridCenters2D[-1][-1]
+
+        # top(u) bottom(b) left(l) right(r) distance (d) from y/x border
+        tldy = topLeftGridPixel.row
+        tldx = topLeftGridPixel.col
+
+        trdy = topRightGridPixel.row
+        trdx = self.cols - topRightGridPixel.col
+
+        bldy = self.rows - bottomLeftGridPixel.row
+        bldx = bottomLeftGridPixel.row
+
+        brdy = self.rows - bottomRightGridPixel.row
+        brdx = self.cols - bottomRightGridPixel.col
+
+        maxYTranslation = np.min([tldy, trdy, bldy, brdy])
+        maxXTranslation = np.min([tldx, trdx, bldx, brdx])
+
+
+        
 
 class MplCanvas(FigureCanvasQTAgg):
 
@@ -258,7 +297,7 @@ class MyWindow(QMainWindow):
         self.setCentralWidget(self.widget)
         
         self.show()
-
+        
         self.imageName = imagePath
 
         self.InitializeImage(imagePath, numGridPoints)
@@ -323,6 +362,7 @@ class MyWindow(QMainWindow):
         image = io.imread(imagePath, as_gray=True) # Enforces gray scale to ensure pixel map read consistently
         self.myMap = PixelMap(image)
         self.myMap.OverlayGrid(numGridPoints)
+        self.myMap.SaveImage()
         # self.myMap.FindGridCenters()
         self.poreData = np.zeros(len(self.myMap.gridCenters))
 
@@ -380,7 +420,8 @@ def main():
     app.setStyle("Fusion")
 
     # Adjust the file name and number of grid points as needed
-    filename = "manualA001-6um2.tif"
+    filename = r"Radius1_Area1_Image6.tif"
+    # filename = r"manualA001-6um2.tif"
     numberOfGridPoints = 100
     win = MyWindow(filename, numberOfGridPoints)
 
