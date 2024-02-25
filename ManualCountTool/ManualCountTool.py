@@ -11,6 +11,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import time
 import os
+import copy
 
 class Pixel:
     def __init__(self, r, g, b, row, col):
@@ -45,6 +46,8 @@ class PixelMap:
         self.pixels = np.empty((self.rows, self.cols), dtype=object)
         self.gridCenters = []
         self.gridCenters2D = None
+        self.gridCenters3D = None
+        self.actualNumPoints = 0
 
         if np.max(image) <= 1.0:
             image *= 255
@@ -52,70 +55,115 @@ class PixelMap:
         for i in range(self.rows):
             for j in range(self.cols):
                 self.pixels[i][j] = Pixel(image[i][j], image[i][j], image[i][j], i, j)
-    # Overlay grid crosses onto pixel map
-    def OverlayGrid(self, numGridPoints):
+    
+    def SetGridPositions(self, numGridPoints, numGrids):
+        numTranslations = numGrids - 1
+
+        # Use heightToWidth ratio to ensure that grid is equally spaced and square according to ASTM standard
         heightToWidthRatio = self.rows / self.cols
         numGridRows = int(np.sqrt(heightToWidthRatio * numGridPoints))
         numGridCols = int(numGridPoints / numGridRows)
 
         print(f"Requested Number of Points: {numGridPoints}")
         print(f"Actual Number of Points: {numGridRows*numGridCols}")
+        self.actualNumPoints = numGridRows*numGridCols
 
-        colPositions = np.linspace(0, self.cols, numGridCols+1, endpoint=False, dtype=int)[1:]
-        rowPositions = np.linspace(0, self.rows, numGridRows+1, endpoint=False, dtype=int)[1:]
+        colRegionBorders = np.linspace(0, self.cols, numGridCols+1, endpoint=True, dtype=int)
+        rowRegionBorders = np.linspace(0, self.rows, numGridRows+1, endpoint=True, dtype=int)
 
-        gridCrossColor = (0,255,255)
-        gridCenters = []
-        for rowPos in rowPositions:
-            for colPos in colPositions:
-                self.gridCenters.append(self.pixels[rowPos][colPos])
+        rowPositions = []
+        colPositions = []
+        for i in range(len(colRegionBorders)-1):
+            colPositions.append(int((colRegionBorders[i]+colRegionBorders[i+1])/2))
 
-                # Center
-                self.pixels[rowPos][colPos].ChangeColor(gridCrossColor)
+        for i in range(len(rowRegionBorders)-1):
+            rowPositions.append(int((rowRegionBorders[i]+rowRegionBorders[i+1])/2))
 
-                # Three above
-                self.pixels[rowPos-1][colPos].ChangeColor(gridCrossColor)
-                self.pixels[rowPos-2][colPos].ChangeColor(gridCrossColor)
-                self.pixels[rowPos-3][colPos].ChangeColor(gridCrossColor)
+        self.gridCenters = []
+        for row in rowPositions:
+            for col in colPositions:
+                self.gridCenters.append(self.pixels[row][col])
 
-                # Three below
-                self.pixels[rowPos+1][colPos].ChangeColor(gridCrossColor)
-                self.pixels[rowPos+2][colPos].ChangeColor(gridCrossColor)
-                self.pixels[rowPos+3][colPos].ChangeColor(gridCrossColor)
-
-                # Three right
-                self.pixels[rowPos][colPos+1].ChangeColor(gridCrossColor)
-                self.pixels[rowPos][colPos+2].ChangeColor(gridCrossColor)
-                self.pixels[rowPos][colPos+3].ChangeColor(gridCrossColor)
-
-                # Three left
-                self.pixels[rowPos][colPos-1].ChangeColor(gridCrossColor)
-                self.pixels[rowPos][colPos-2].ChangeColor(gridCrossColor)
-                self.pixels[rowPos][colPos-3].ChangeColor(gridCrossColor)
-        
         gridCenters = np.array(self.gridCenters)
         self.gridCenters2D = gridCenters.reshape(numGridRows, numGridCols)
-                
-    # Find center of grid crosses
-    # only works if grid crosses are 1 pixel wide
-    def FindGridCenters(self):
-        # Locate all grid centers by finding non-gray pixels
-        for pixel in self.pixels.flatten():
-            if pixel.color:
-                if self.pixels[pixel.row - 1][pixel.col].color and self.pixels[pixel.row][pixel.col + 1].color:
-                    self.gridCenters.append(pixel)
+
+        maxXTranslation, maxYTranslation = self.__GetMaxTranslation__()
+
+        randomNegative = lambda: 1 if np.random.random() < 0.5 else -1
+
+        self.gridCenters3D = [copy.deepcopy(self.gridCenters2D)]
         
-        # Reshape into 2D array
-        gridCenters = np.array(self.gridCenters)
-        cnt = 0
-        lastRow = self.gridCenters[0].row
-        for center in self.gridCenters:
-            if center.row != lastRow:
-                numCols = cnt
-                break
-            cnt += 1
-        numRows = int(len(self.gridCenters) / numCols)
-        self.gridCenters2D = gridCenters.reshape(numRows, numCols)
+        for i in range(numTranslations):
+            temp = copy.deepcopy(self.gridCenters2D)
+            xTranslation = np.random.randint(2, maxXTranslation-3) * randomNegative()
+            yTranslation = np.random.randint(2, maxYTranslation-3) * randomNegative()
+            for row in range(len(self.gridCenters2D)):
+                for col in range(len(self.gridCenters2D[row])):
+                    temp[row][col].row += yTranslation
+                    temp[row][col].col += xTranslation
+            self.gridCenters3D.append(copy.deepcopy(temp))
+        
+        self.gridCenters3D = np.array(self.gridCenters3D)
+  
+    def __GetMaxTranslation__(self):
+        topLeftGridPixel = self.gridCenters2D[0][0]
+        topRightGridPixel = self.gridCenters2D[0][-1]
+        bottomLeftGridPixel = self.gridCenters2D[-1][0]
+        bottomRightGridPixel = self.gridCenters2D[-1][-1]
+
+        # top(u) bottom(b) left(l) right(r) distance (d) from y/x border
+        tldy = topLeftGridPixel.row
+        tldx = topLeftGridPixel.col
+
+        trdy = topRightGridPixel.row
+        trdx = self.cols - topRightGridPixel.col
+
+        bldy = self.rows - bottomLeftGridPixel.row
+        bldx = bottomLeftGridPixel.col
+
+        brdy = self.rows - bottomRightGridPixel.row
+        brdx = self.cols - bottomRightGridPixel.col
+
+        # distance between grid points
+        griddx = int((self.gridCenters2D[0][1].col - self.gridCenters2D[0][0].col) / 2)
+        griddy = int((self.gridCenters2D[1][0].row - self.gridCenters2D[0][0].row) / 2)
+
+        maxYTranslation = np.min([tldy, trdy, bldy, brdy, griddy]) - 1
+        maxXTranslation = np.min([tldx, trdx, bldx, brdx, griddx]) - 1
+
+        return maxXTranslation, maxYTranslation
+    
+    # Overlay grid crosses onto pixel map
+    def OverlayGrid(self):
+        gridCrossColor = (0,255,255)
+
+        for i in range(len(self.gridCenters3D)):
+            for j in range(len(self.gridCenters3D[i])):
+                for gridCenterPixel in self.gridCenters3D[i][j]:
+                    pixelRow = gridCenterPixel.row
+                    pixelCol = gridCenterPixel.col
+                    # Center
+                    self.pixels[pixelRow][pixelCol].ChangeColor(gridCrossColor)
+
+                    # Three above
+                    self.pixels[pixelRow-1][pixelCol].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow-2][pixelCol].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow-3][pixelCol].ChangeColor(gridCrossColor)
+
+                    # Three below
+                    self.pixels[pixelRow+1][pixelCol].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow+2][pixelCol].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow+3][pixelCol].ChangeColor(gridCrossColor)
+
+                    # Three right
+                    self.pixels[pixelRow][pixelCol+1].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow][pixelCol+2].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow][pixelCol+3].ChangeColor(gridCrossColor)
+
+                    # Three left
+                    self.pixels[pixelRow][pixelCol-1].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow][pixelCol-2].ChangeColor(gridCrossColor)
+                    self.pixels[pixelRow][pixelCol-3].ChangeColor(gridCrossColor)
 
     # Shows full image
     def ShowImage(self):
@@ -139,32 +187,41 @@ class PixelMap:
         
         plt.imsave("test.png", saveArray)
 
-    # Recursive function to change color
-    # Changes all connecting pixel matching color of base pixel
-    def ChangeConnectingColor(self, row, col, newColor):
-        currentPixel = self.pixels[row][col]
+    # Initiate grid color change
+    def ChangeGridColor(self, poreIndex, gridIndex, newColor):
+        center = self.gridCenters3D[gridIndex].flatten()[poreIndex]
+        pixelRow = center.row
+        pixelCol = center.col
 
-        baseColor = (currentPixel.r, currentPixel.g, currentPixel.b)
+        # Center
+        self.pixels[pixelRow][pixelCol].ChangeColor(newColor)
 
-        # Check if pixel is already the requested newColor
-        if currentPixel.CompareColor(newColor):
-            return
+        # Three above
+        self.pixels[pixelRow-1][pixelCol].ChangeColor(newColor)
+        self.pixels[pixelRow-2][pixelCol].ChangeColor(newColor)
+        self.pixels[pixelRow-3][pixelCol].ChangeColor(newColor)
 
-        currentPixel.ChangeColor(newColor)
+        # Three below
+        self.pixels[pixelRow+1][pixelCol].ChangeColor(newColor)
+        self.pixels[pixelRow+2][pixelCol].ChangeColor(newColor)
+        self.pixels[pixelRow+3][pixelCol].ChangeColor(newColor)
 
-        neighbors = [self.pixels[row-1][col], self.pixels[row+1][col], self.pixels[row][col-1], self.pixels[row][col+1]]
-        
-        for neighbor in neighbors: 
-            if neighbor.CompareColor(baseColor):
-                self.ChangeConnectingColor(neighbor.row, neighbor.col, newColor)
+        # Three right
+        self.pixels[pixelRow][pixelCol+1].ChangeColor(newColor)
+        self.pixels[pixelRow][pixelCol+2].ChangeColor(newColor)
+        self.pixels[pixelRow][pixelCol+3].ChangeColor(newColor)
 
-    def ChangeGridColor(self, index, newColor):
-        center = self.gridCenters[index]
-        self.ChangeConnectingColor(center.row, center.col, newColor)
+        # Three left
+        self.pixels[pixelRow][pixelCol-1].ChangeColor(newColor)
+        self.pixels[pixelRow][pixelCol-2].ChangeColor(newColor)
+        self.pixels[pixelRow][pixelCol-3].ChangeColor(newColor)
 
     # Returns np array containing image around grid center based on index
-    def GetGridCenterImage(self, index, numSurroundingPixels=50):
-        center = self.gridCenters[index]
+    # Always center around original grid index (0) to prevent view from jumping around too much
+    def GetGridCenterImage(self, poreIndex, gridIndex, numSurroundingPixels=50):
+        self.ChangeGridColor(poreIndex, gridIndex, (0,0,255))
+
+        center = self.gridCenters3D[0].flatten()[poreIndex]
 
         newImage = np.zeros((numSurroundingPixels * 2 + 1, numSurroundingPixels * 2 + 1, 3), dtype=int)
         for i in range(numSurroundingPixels * 2 + 1):
@@ -178,7 +235,7 @@ class PixelMap:
 
     # Displays a single grid center image based on index
     def ShowGridCenter(self, index):
-        center = self.gridCenters[index]
+        center = self.gridCenters3D[0].flatten()[index]
 
         # Set center of interest to red
         center.r = 255
@@ -203,31 +260,6 @@ class PixelMap:
 
             self.ChangeGridColor(gridIndex, (0, 255, 0))
 
-    # Gets values for translating grid in order to get error estimations
-    def GetGridTranslationValues(self, numberOfTranslations):
-        topLeftGridPixel = self.gridCenters2D[0][0]
-        topRightGridPixel = self.gridCenters2D[0][-1]
-        bottomLeftGridPixel = self.gridCenters2D[-1][0]
-        bottomRightGridPixel = self.gridCenters2D[-1][-1]
-
-        # top(u) bottom(b) left(l) right(r) distance (d) from y/x border
-        tldy = topLeftGridPixel.row
-        tldx = topLeftGridPixel.col
-
-        trdy = topRightGridPixel.row
-        trdx = self.cols - topRightGridPixel.col
-
-        bldy = self.rows - bottomLeftGridPixel.row
-        bldx = bottomLeftGridPixel.row
-
-        brdy = self.rows - bottomRightGridPixel.row
-        brdx = self.cols - bottomRightGridPixel.col
-
-        maxYTranslation = np.min([tldy, trdy, bldy, brdy])
-        maxXTranslation = np.min([tldx, trdx, bldx, brdx])
-
-
-        
 
 class MplCanvas(FigureCanvasQTAgg):
 
@@ -238,7 +270,7 @@ class MplCanvas(FigureCanvasQTAgg):
 
 class MyWindow(QMainWindow):
 
-    def __init__(self, imagePath, numGridPoints):
+    def __init__(self, imagePath, numGridPoints, numGrids):
         super(MyWindow,self).__init__()
 
         self.setWindowTitle("Pore Counter Tool")
@@ -249,11 +281,16 @@ class MyWindow(QMainWindow):
 
         hbox2 = QtWidgets.QHBoxLayout()
 
-        self.lastEntryText = QtWidgets.QLabel("Last Data Entry: --")
+        self.lastEntryText = QtWidgets.QLabel("Last Entry: --")
         self.lastEntryText.setAlignment(QtCore.Qt.AlignCenter)
         self.lastEntryText.setStyleSheet("background-color: light gray; border: 1px solid black;")
 
+        self.indexProgressText = QtWidgets.QLabel(f"Pore: -/-, Grid: -/-")
+        self.indexProgressText.setAlignment(QtCore.Qt.AlignCenter)
+        self.indexProgressText.setStyleSheet("background-color: light gray; border: 1px solid black;")
+
         hbox2.addWidget(self.lastEntryText)
+        hbox2.addWidget(self.indexProgressText)
         
         self.zoomOutButton = QtWidgets.QPushButton("Zoom Out")
         self.zoomOutButton.clicked.connect(self.ZoomOut)
@@ -299,14 +336,16 @@ class MyWindow(QMainWindow):
         self.show()
         
         self.imageName = imagePath
+        
+        self.numGrids = numGrids
+        self.InitializeImage(imagePath, numGridPoints, numGrids)
+        self.numSurroundingPixels = np.max(self.myMap.__GetMaxTranslation__())
 
-        self.InitializeImage(imagePath, numGridPoints)
-        self.numSurroundingPixels = 50
-
-        self.nextIndex = 0
+        self.poreIndex = 0
+        self.gridIndex = 0
         self.numGridRows = len(self.myMap.gridCenters2D)
 
-        newImage = self.myMap.GetGridCenterImage(self.nextIndex, self.numSurroundingPixels)
+        newImage = self.myMap.GetGridCenterImage(self.poreIndex, self.gridIndex, self.numSurroundingPixels)
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
@@ -318,18 +357,18 @@ class MyWindow(QMainWindow):
         if self.numSurroundingPixels < 300:
             self.numSurroundingPixels += 25
         
-        newImage = self.myMap.GetGridCenterImage(self.nextIndex, self.numSurroundingPixels)
+        newImage = self.myMap.GetGridCenterImage(self.poreIndex, self.gridIndex, self.numSurroundingPixels)
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
         self.sc.draw()
 
-        if self.numSurroundingPixels == 300:
+        if self.numSurroundingPixels >= 300:
             self.zoomOutButton.setEnabled(False)
         else:
             self.zoomOutButton.setEnabled(True)
 
-        if self.numSurroundingPixels == 25:
+        if self.numSurroundingPixels <= 25:
             self.zoomInButton.setEnabled(False)
         else:
             self.zoomInButton.setEnabled(True)
@@ -340,7 +379,7 @@ class MyWindow(QMainWindow):
         if self.numSurroundingPixels > 25:
             self.numSurroundingPixels -= 25
         
-        newImage = self.myMap.GetGridCenterImage(self.nextIndex, self.numSurroundingPixels)
+        newImage = self.myMap.GetGridCenterImage(self.poreIndex, self.gridIndex, self.numSurroundingPixels)
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
@@ -358,13 +397,15 @@ class MyWindow(QMainWindow):
         
         self.widget.setFocus(QtCore.Qt.NoFocusReason)
 
-    def InitializeImage(self,imagePath, numGridPoints):
+    def InitializeImage(self,imagePath, numGridPoints, numGrids):
         image = io.imread(imagePath, as_gray=True) # Enforces gray scale to ensure pixel map read consistently
         self.myMap = PixelMap(image)
-        self.myMap.OverlayGrid(numGridPoints)
-        self.myMap.SaveImage()
+        self.myMap.SetGridPositions(numGridPoints, numGrids)
+        self.myMap.OverlayGrid()
+        # self.myMap.SaveImage()
         # self.myMap.FindGridCenters()
-        self.poreData = np.zeros(len(self.myMap.gridCenters))
+        self.poreData = np.zeros((numGrids,self.myMap.actualNumPoints))
+        self.indexProgressText.setText(f"Pore: 1/{self.myMap.actualNumPoints}, Grid: 1/{self.numGrids}")
 
     def keyPressEvent(self, event):
         if event.key() == QtCore.Qt.Key_Left:
@@ -388,28 +429,45 @@ class MyWindow(QMainWindow):
     
     def RecordDataPoint(self, value):
         # -1 is go back
-        if value == -1 and self.nextIndex > 0:
-            self.myMap.ChangeGridColor(self.nextIndex, (255,255,0))
-            self.nextIndex -= 1
-        elif value == -1 and self.nextIndex == 0:
-            self.nextIndex = 0
+        if value == -1 and self.gridIndex > 0:
+            self.myMap.ChangeGridColor(self.poreIndex, self.gridIndex, (0,255,255))
+            self.gridIndex -= 1
+        elif value == -1 and self.gridIndex == 0 and self.poreIndex > 0:
+            self.myMap.ChangeGridColor(self.poreIndex, self.gridIndex, (0,255,255))
+            self.poreIndex -= 1
+            self.gridIndex = self.numGrids-1
+        elif value == -1 and self.gridIndex == 0 and self.poreIndex == 0:
+            pass
         else:
-            self.poreData[self.nextIndex] = value
-            self.myMap.ChangeGridColor(self.nextIndex, (0,255,0))
-            self.nextIndex += 1
-        
-        if self.nextIndex >= len(self.myMap.gridCenters):
-            self.poreData = self.poreData.reshape(len(self.myMap.gridCenters2D), len(self.myMap.gridCenters2D[0]))
-            np.savetxt(f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv", 
-                       self.poreData, 
-                       fmt="%.2f", 
-                       delimiter=",", 
-                       header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {len(self.myMap.gridCenters)} grid points \n",
-                       footer=f"\n Porosity: {np.sum(self.poreData) / (np.shape(self.poreData)[0] * np.shape(self.poreData)[1]) * 100}")
-            print(f"Porosity: {np.sum(self.poreData) / (np.shape(self.poreData)[0] * np.shape(self.poreData)[1]) * 100}")
+            self.myMap.ChangeGridColor(self.poreIndex, self.gridIndex, (0,255,0))
+            self.poreData[self.gridIndex][self.poreIndex] = value
+
+            # At last grid index, move to next pore index
+            if self.gridIndex == self.numGrids-1:
+                self.gridIndex = 0
+                self.poreIndex += 1            
+            else:
+                self.gridIndex += 1
+
+        if self.poreIndex >= self.myMap.actualNumPoints:
+            porosity = []
+            with open(f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv", "a") as f:
+                for i, grid in enumerate(self.poreData):
+                    porosity.append((np.sum(self.poreData[i]) / self.myMap.actualNumPoints))
+                    np.savetxt(f, 
+                        grid.reshape((len(self.myMap.gridCenters2D), len(self.myMap.gridCenters2D[0]))), 
+                        fmt="%.2f", 
+                        delimiter=",", 
+                        header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {len(self.myMap.gridCenters)} grid points \n Grid {i} \n",
+                        footer=f"\n Porosity: {porosity[i] * 100}%")
+                
+                    print(f"Grid {i} Porosity: {porosity[i]*100:.2f}%")
+            print(f"Average Porosity: {np.mean(porosity) * 100:.2f}")
+            print(f"Standard Deviation: {np.std(porosity) * 100:.2f}")
             quit()
 
-        newImage = self.myMap.GetGridCenterImage(self.nextIndex, self.numSurroundingPixels)
+        newImage = self.myMap.GetGridCenterImage(self.poreIndex, self.gridIndex, self.numSurroundingPixels)
+        self.indexProgressText.setText(f"Pore: {self.poreIndex+1}/{self.myMap.actualNumPoints}, Grid: {self.gridIndex+1}/{self.numGrids}")
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
@@ -421,9 +479,9 @@ def main():
 
     # Adjust the file name and number of grid points as needed
     filename = r"Radius1_Area1_Image6.tif"
-    # filename = r"manualA001-6um2.tif"
     numberOfGridPoints = 100
-    win = MyWindow(filename, numberOfGridPoints)
+    numGrids = 3
+    win = MyWindow(filename, numberOfGridPoints, numGrids)
 
     win.show()
     sys.exit(app.exec_())
