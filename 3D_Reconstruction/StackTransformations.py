@@ -52,6 +52,7 @@ def SplitImageIntoQuadrants(image):
     pass
 
 def AugmentStackData(stackFolder):
+    pass
 
 def main():
     StackVerticalShift("/Users/mitchellmika/Desktop/TrainingData")
