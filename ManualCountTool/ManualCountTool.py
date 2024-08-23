@@ -1,4 +1,3 @@
-from tkinter import image_types
 import numpy as np
 from skimage import io
 import matplotlib
@@ -9,7 +8,6 @@ from PyQt5.QtWidgets import QApplication, QMainWindow
 import sys
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-import time
 import os
 import copy
 
@@ -260,7 +258,6 @@ class PixelMap:
 
             self.ChangeGridColor(gridIndex, (0, 255, 0))
 
-
 class MplCanvas(FigureCanvasQTAgg):
 
     def __init__(self, parent=None, width=5, height=4, dpi=100):
@@ -270,8 +267,10 @@ class MplCanvas(FigureCanvasQTAgg):
 
 class MyWindow(QMainWindow):
 
-    def __init__(self, imagePath, numGridPoints, numGrids):
+    def __init__(self, imagePath, numGridPoints, numGrids, saveDir=None):
         super(MyWindow,self).__init__()
+
+        self.saveDir = saveDir
 
         self.setWindowTitle("Pore Counter Tool")
 
@@ -451,7 +450,11 @@ class MyWindow(QMainWindow):
 
         if self.poreIndex >= self.myMap.actualNumPoints:
             porosity = []
-            with open(f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv", "a") as f:
+            if self.saveDir is None:
+                saveFileName = f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv"
+            else:
+                saveFileName = f"{self.saveDir}/{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv"
+            with open(saveFileName, "a") as f:
                 for i, grid in enumerate(self.poreData):
                     porosity.append((np.sum(self.poreData[i]) / self.myMap.actualNumPoints))
                     np.savetxt(f, 
@@ -473,18 +476,45 @@ class MyWindow(QMainWindow):
         self.sc.axes.imshow(newImage)
         self.sc.draw()
 
-def main():
+def SingleImage(filename):
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
 
     # Adjust the file name and number of grid points as needed
-    filename = r"Radius1_Area1_Image6.tif"
     numberOfGridPoints = 100
     numGrids = 3
     win = MyWindow(filename, numberOfGridPoints, numGrids)
 
     win.show()
     sys.exit(app.exec_())
+
+def Directory(dirname):
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    dirBaseName = os.path.basename(dirname)
+
+    files = os.listdir(dirname)
+
+    if not os.path.exists(f"{dirBaseName}_PROGRESS"):
+        os.mkdir(f"{dirBaseName}_PROGRESS")
+    else:
+        lastFileAnalyzed = f"{os.listdir(dirBaseName)[-1].split('_')[0]}.tif"
+        lastFileIdx = files.index(lastFileAnalyzed)
+        files = files[lastFileIdx+1:]
+
+    # Adjust the file name and number of grid points as needed
+    for file in files:
+        numberOfGridPoints = 100
+        numGrids = 3
+        win = MyWindow(f"{dirname}/{file}", numberOfGridPoints, numGrids)
+
+    win.show()
+    sys.exit(app.exec_())
+
+def main():
+    SingleImage("ManualCountTool/TestData/BSE_A_5kx_116.jpg")
+    # Directory("/Users/mmika/Desktop/dividedImages")
 
 if __name__ == "__main__":
     main()
