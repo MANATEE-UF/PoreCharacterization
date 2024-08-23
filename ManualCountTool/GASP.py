@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.special
 from skimage import io
+from skimage.color import gray2rgb
 import matplotlib
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
@@ -17,7 +18,7 @@ class PixelMap:
         self.rows = len(image)
         self.cols = len(image[0])
         self.numPixels = self.rows * self.cols
-        self.originalImage = image
+        self.originalImage = image # RGB image
 
         if np.max(image) <= 1.0:
             image *= 255
@@ -25,7 +26,7 @@ class PixelMap:
     # Overlay a grid onto the original image and return centered around that grid
     def GetImageWithGridOverlay(self, pixelRow:int, pixelCol:int, newColor:tuple, numSurroundingPixels:int) -> np.ndarray: 
         # Center
-        displayImage = self.originalImage
+        displayImage = gray2rgb(self.originalImage)
 
         displayImage[pixelRow][pixelCol] = newColor
 
@@ -48,9 +49,12 @@ class PixelMap:
         displayImage[pixelRow][pixelCol-1] = newColor
         displayImage[pixelRow][pixelCol-2] = newColor
         displayImage[pixelRow][pixelCol-3] = newColor
+        
+        # pad image to ensure display proper
+        displayImage = np.pad(displayImage, ((numSurroundingPixels+1, numSurroundingPixels+1), (numSurroundingPixels+1, numSurroundingPixels+1), (0,0)))
 
         # Crop the image to center around the grid with numSurroundingPixels around
-        displayImage = displayImage[pixelRow-numSurroundingPixels:pixelRow+numSurroundingPixels,pixelCol-numSurroundingPixels:pixelCol+numSurroundingPixels,:]
+        displayImage = displayImage[pixelRow:pixelRow+2*numSurroundingPixels,pixelCol:pixelCol+2*numSurroundingPixels,:]
 
         return displayImage
 
@@ -103,7 +107,7 @@ class MyWindow(QMainWindow):
         leftText.setAlignment (QtCore.Qt.AlignCenter)
         leftText.setStyleSheet("background-color: light gray; border: 1px solid black;")
 
-        upText = QtWidgets.QLabel("Up Arrow Key For Re-sample")
+        upText = QtWidgets.QLabel("Up Arrow Key For 0.5")
         upText.setAlignment (QtCore.Qt.AlignCenter)
         upText.setStyleSheet("background-color: light gray; border: 1px solid black;")
 
@@ -131,7 +135,7 @@ class MyWindow(QMainWindow):
         self.show()
         
         self.imageName = imagePath
-        image = io.imread(imagePath, as_gray=True) # Enforces gray scale to ensure pixel map read consistently
+        image = io.imread(imagePath, as_gray=True)
         self.myMap = PixelMap(image)
         self.N = self.myMap.numPixels
         self.numStrata_N = numStrata_N
@@ -139,17 +143,23 @@ class MyWindow(QMainWindow):
         
         self.numSurroundingPixels = 50
 
-        self.n_h = self.CalculateSampleSize()
-        samplePositions, strataBounds = self.SampleImage(self.n_h)
+        self.alpha = 0.05
+        self.MOE = 0.15
+        self.e_moe = 0.30
+        self.d = 0.5
+
+        self.n_h = self.CalculateSampleSize(self.alpha, self.MOE, self.e_moe, self.d)
+        self.samplePositions = self.SampleImage(self.n_h)
         self.numGrids = np.sum(self.n_h)
 
         self.sampleIndex = 0
         self.strataIndex = 0
+        self.gridIndex = 0 # Used to track flattend index, useful for writing to 1D poreData
 
         self.poreData = np.zeros((self.numGrids))
-        self.indexProgressText.setText(f"Sample: {self.sampleIndex}/{len(self.n_h[self.strataIndex])}, Strata: {self.strataIndex}/{self.numStrata_N**2}")
+        self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
 
-        displayImage = self.myMap.GetImageWithGridOverlay(0, 0, (1,1,1), self.numSurroundingPixels)
+        displayImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
 
         self.sc.axes.cla()
         self.sc.axes.imshow(displayImage)
@@ -160,54 +170,108 @@ class MyWindow(QMainWindow):
     # Returns a list of optimal strata sample size (n_h)
     def CalculateSampleSize(self, alpha, MOE, e_moe, d) -> list:
         W_h = 1 / self.numStrata_N**2 # Value constant because image is split evenly. small differences neglected
-        initialGuesses = np.ones(self.numStrata_N) * 0.5 # TODO: Replace this with AIVA
-        initialStrataProportion = np.sum(self.numStrata_N * initialGuesses)
-        variance = 1E6
-        n_0 = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance)
-        n = n_0 / (1 + (np.sum(W_h * initialGuesses * (1-initialGuesses))) / (self.myMap.numPixels * variance))
-        upperCL = self.UpperCL(n, int(np.ceil(initialStrataProportion * n)), alpha)
-        lowerCL = self.LowerCL(n, int(np.ceil(initialStrataProportion * n)), n, alpha)
+        initialGuesses = np.ones(self.numStrata_N**2) * 0.5 # TODO: Replace this with AIVA
+        initialStrataProportion = 0.5 # TODO: Use actual calculation when implementing AIVA
+        variance = np.sum(W_h * np.sqrt(initialGuesses * (1 - initialGuesses)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * initialGuesses * (1 - initialGuesses))) # highest variance given the initial guesses, assuming only one point taken per stratum
+        upperCL = 1.0
+        lowerCL = 0.0
+        withinTolerance = False
+        while not withinTolerance:
+            n_0 = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance)
+            n = n_0 / (1 + (np.sum(W_h * initialGuesses * (1-initialGuesses))) / (self.myMap.numPixels * variance))
+            upperCL = self.UpperCL_A(int(n), int(np.ceil(initialStrataProportion * n)), alpha) / self.myMap.numPixels
+            lowerCL = self.LowerCL_A(int(n), int(np.ceil(initialStrataProportion * n)), int(n), alpha) / self.myMap.numPixels
 
+            if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
+                variance *= d
+            else: # Eq. 15 satisfied
+                pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
+                if pctDiff > e_moe: # variance too low, overestimating how many sample points needed
+                    variance /= d
+                    d /= 2
+                    variance *= d
+                else:
+                    withinTolerance = True
+            
+            print(((upperCL - lowerCL) / 2))
+            print(abs((((upperCL - lowerCL) / 2) - MOE) / MOE))
+        n = int(np.ceil(n))
 
-    # TODO: Should i be incrementing or decrementing? i.e., does higher A_U result in higher sum?
-    def UpperCL(self, n, upperBound, alpha):
+        strataVars = np.empty(self.numStrata_N**2)
+        cnt = 0
+        for i in range(self.numStrata_N):
+            topBound = int(i*self.myMap.rows/self.numStrata_N)
+            bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
+            for j in range(self.numStrata_N):
+                leftBound = int(j*self.myMap.cols/self.numStrata_N)
+                rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
+                strataVars[cnt] = np.var(self.myMap.originalImage[topBound:bottomBound,leftBound:rightBound])
+                cnt += 1
+
+        n_h = np.empty(self.numStrata_N**2)
+
+        n_h = np.ceil(n * self.N_h * strataVars / np.sum(self.N_h * strataVars)).astype(int)
+        print(f"{np.sum(n_h)} samples needed to achieve {MOE} MOE with {100*(1-alpha)}% CI")
+
+        print(n_h)
+
+        return n_h
+
+    # Higher A_U yields lower sum
+    def UpperCL_A(self, n, upperBound, alpha):
         # Pr(a,a' | A, A') = (A a) x (A' a') / (N n)
         probDistribution = 1.0
-        A_U = upperBound # Ensures A_U always greater than i
+        A_U = upperBound # Ensures A_U always greater than i # TODO: May need to revise logic here
         while probDistribution > alpha:
-            A_U += 1
+            A_U += 10
             sum = 0
             for i in range(upperBound):
                 sum += scipy.special.comb(A_U, i, exact=True) * scipy.special.comb(self.N - A_U, n-i, exact=True) / scipy.special.comb(self.N, n, exact=True)
-            
+
             probDistribution = sum
         
         return A_U
-
-    def LowerCL(self, n, lowerBound, upperBound, alpha):
-        probDistribution = 1.0
+    
+    # Higher A_L yields higher sum
+    def LowerCL_A(self, n, lowerBound, upperBound, alpha):
+        probDistribution = 0.0
         A_L = upperBound
-        while probDistribution > alpha:
-            A_L += 1
+        while probDistribution <= alpha:
+            A_L += 10
             sum = 0
             for i in range(lowerBound, upperBound):
                 sum += scipy.special.comb(A_L, i, exact=True) * scipy.special.comb(self.N - A_L, n-i, exact=True) / scipy.special.comb(self.N, n, exact=True)
             
             probDistribution = sum
+        
+        return A_L-1
     
-    # Returns a list of pixel positions and a list indicating where strata index boundaries are
+    # Returns a 2D list of pixel positions
+    # First axis is strata axis, second axis is sample axis
     def SampleImage(self, n_h):
-        pass
+        pixels = []
+        cnt = 0
+        for i in range(self.numStrata_N):
+            topBound = int(i*self.myMap.rows/self.numStrata_N)
+            bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
+            for j in range(self.numStrata_N):
+                leftBound = int(j*self.myMap.cols/self.numStrata_N)
+                rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
 
-    # Returns a (row, col) tuple corresponding to position of pixel in image for a sample and strata index
-    def GetPixelInStrata(self,sampleIdx:int, strataIdx:int) -> tuple:
-        pass
+                randomY = np.random.choice(np.arange(topBound, bottomBound), n_h[cnt], replace=False)
+                randomX = np.random.choice(np.arange(leftBound, rightBound), n_h[cnt], replace=False)
+
+                pixels.append(list(zip(randomY, randomX)))
+
+                cnt += 1
+        
+        return pixels
 
     def ZoomOut(self):
         if self.numSurroundingPixels < 300:
             self.numSurroundingPixels += 25
         
-        newImage = self.myMap.GetGridCenterImage(self.poreIndex, self.gridIndex, self.numSurroundingPixels)
+        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
@@ -229,7 +293,7 @@ class MyWindow(QMainWindow):
         if self.numSurroundingPixels > 25:
             self.numSurroundingPixels -= 25
         
-        newImage = self.myMap.GetGridCenterImage(self.poreIndex, self.gridIndex, self.numSurroundingPixels)
+        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
@@ -267,51 +331,59 @@ class MyWindow(QMainWindow):
         else:
             pass
     
+    # FIXME: Out of bounds error on 347 and 366
     def RecordDataPoint(self, value):
         # -1 is go back
-        if value == -1 and self.gridIndex > 0:
-            self.myMap.ChangeGridColor(self.poreIndex, self.gridIndex, (0,255,255))
+        if value == -1 and self.sampleIndex > 0: # move back one sample
+            self.sampleIndex -= 1
             self.gridIndex -= 1
-        elif value == -1 and self.gridIndex == 0 and self.poreIndex > 0:
-            self.myMap.ChangeGridColor(self.poreIndex, self.gridIndex, (0,255,255))
-            self.poreIndex -= 1
-            self.gridIndex = self.numGrids-1
-        elif value == -1 and self.gridIndex == 0 and self.poreIndex == 0:
+        elif value == -1 and self.sampleIndex == 0 and self.strataIndex > 0: # move to end of last strata
+            self.strataIndex -= 1
+            self.sampleIndex = self.n_h[self.strataIndex] - 1
+            self.gridIndex -= 1
+        elif value == -1 and self.sampleIndex == 0 and self.strataIndex == 0: # at the beginning of samples, do nothing
             pass
-        else:
-            self.myMap.ChangeGridColor(self.poreIndex, self.gridIndex, (0,255,0))
-            self.poreData[self.gridIndex][self.poreIndex] = value
+        else: # record value
+            self.poreData[self.gridIndex] = value
+            self.gridIndex += 1
 
             # At last grid index, move to next pore index
-            if self.gridIndex == self.numGrids-1:
-                self.gridIndex = 0
-                self.poreIndex += 1            
+            if self.sampleIndex == self.n_h[self.strataIndex] - 1:
+                self.sampleIndex = 0
+                self.strataIndex += 1           
             else:
-                self.gridIndex += 1
+                self.sampleIndex += 1
 
-        if self.poreIndex >= self.myMap.actualNumPoints:
-            porosity = []
+        if self.gridIndex >= self.numGrids:
+            p_h = []
             if self.saveDir is None:
-                saveFileName = f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv"
+                saveFileName = f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{self.numGrids}GridPoints_countData.csv"
             else:
-                saveFileName = f"{self.saveDir}/{os.path.splitext(os.path.basename(self.imageName))[0]}_{len(self.myMap.gridCenters)}GridPoints_countData.csv"
+                saveFileName = f"{self.saveDir}/{os.path.splitext(os.path.basename(self.imageName))[0]}_{self.numGrids}GridPoints_countData.csv"
             with open(saveFileName, "a") as f:
-                for i, grid in enumerate(self.poreData):
-                    porosity.append((np.sum(self.poreData[i]) / self.myMap.actualNumPoints))
-                    np.savetxt(f, 
-                        grid.reshape((len(self.myMap.gridCenters2D), len(self.myMap.gridCenters2D[0]))), 
-                        fmt="%.2f", 
-                        delimiter=",", 
-                        header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {len(self.myMap.gridCenters)} grid points \n Grid {i} \n",
-                        footer=f"\n Porosity: {porosity[i] * 100}%")
+                for i, n in enumerate(self.n_h):
+                    bounds = [np.cumsum(self.n_h[:i]), np.cumsum(self.n_h[:i]) + n]
+                    p_h.append(np.average(self.poreData[bounds]))
+
+                p_st = np.sum(p_h) * self.N_h / self.N
+
+                # variance = (1 / self.N)**2 * np.sum((self.N_h**2 * (self.N_h-self.n_h) * p_h * (1-p_h)) / ((self.N_h-1) * self.n_h))
+
+                upperCL = self.UpperCL_A(self.numGrids, int(np.round(p_st*n)), self.alpha) / self.N
+                lowerCL = self.LowerCL_A(self.numGrids, int(np.round(p_st*n)), self.numGrids, self.alpha) / self.N
+
+                np.savetxt(f, 
+                    p_h, 
+                    fmt="%.2f", 
+                    delimiter=",", 
+                    header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {self.numGrids} samples across {self.numStrata_N**2} strata. \n alpha = {self.alpha} \n MOE = {self.MOE} \n e_moe = {self.e_moe} \n d = {self.d}",
+                    footer=f"\n Porosity: {p_st[i] * 100}% \n {1-self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {upperCL - lowerCL / 2}")
                 
-                    print(f"Grid {i} Porosity: {porosity[i]*100:.2f}%")
-            print(f"Average Porosity: {np.mean(porosity) * 100:.2f}")
-            print(f"Standard Deviation: {np.std(porosity) * 100:.2f}")
+            print(f"\n Porosity: {p_st[i] * 100}% \n {1-self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {upperCL - lowerCL / 2}")
             quit()
 
-        newImage = self.myMap.GetGridCenterImage(self.poreIndex, self.gridIndex, self.numSurroundingPixels)
-        self.indexProgressText.setText(f"Pore: {self.poreIndex+1}/{self.myMap.actualNumPoints}, Strata: {self.gridIndex+1}/{self.numGrids}")
+        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
+        self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
@@ -322,7 +394,7 @@ def SingleImage(filename):
     app.setStyle("Fusion")
 
     strataGrid_N = 4
-    win = MyWindow(filename)
+    win = MyWindow(filename, strataGrid_N)
 
     win.show()
     sys.exit(app.exec_())
