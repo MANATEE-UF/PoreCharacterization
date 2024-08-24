@@ -18,10 +18,11 @@ class PixelMap:
         self.rows = len(image)
         self.cols = len(image[0])
         self.numPixels = self.rows * self.cols
-        self.originalImage = image # RGB image
+        self.originalImage = image # grayscale
 
         if np.max(image) <= 1.0:
-            image *= 255
+            self.originalImage *= 255
+            self.originalImage = self.originalImage.astype(int)
 
     # Overlay a grid onto the original image and return centered around that grid
     def GetImageWithGridOverlay(self, pixelRow:int, pixelCol:int, newColor:tuple, numSurroundingPixels:int) -> np.ndarray: 
@@ -31,24 +32,24 @@ class PixelMap:
         displayImage[pixelRow][pixelCol] = newColor
 
         # Three above
-        displayImage[pixelRow-1][pixelCol] = newColor
-        displayImage[pixelRow-2][pixelCol] = newColor
-        displayImage[pixelRow-3][pixelCol] = newColor
+        maxVal = 3 if pixelRow > 2 else pixelRow
+        for i in range(1,maxVal):
+            displayImage[pixelRow-i][pixelCol] = newColor
 
         # Three below
-        displayImage[pixelRow+1][pixelCol] = newColor
-        displayImage[pixelRow+2][pixelCol] = newColor
-        displayImage[pixelRow+3][pixelCol] = newColor
+        maxVal = 3 if pixelRow < self.rows-3 else self.rows-pixelRow
+        for i in range(1,maxVal):
+            displayImage[pixelRow+i][pixelCol] = newColor
 
         # Three right
-        displayImage[pixelRow][pixelCol+1] = newColor
-        displayImage[pixelRow][pixelCol+2] = newColor
-        displayImage[pixelRow][pixelCol+3] = newColor
+        maxVal = 3 if pixelCol < self.cols-3 else self.cols-pixelCol
+        for i in range(1,maxVal):
+            displayImage[pixelRow][pixelCol+i] = newColor
 
         # Three left
-        displayImage[pixelRow][pixelCol-1] = newColor
-        displayImage[pixelRow][pixelCol-2] = newColor
-        displayImage[pixelRow][pixelCol-3] = newColor
+        maxVal = 3 if pixelCol > 2 else pixelCol
+        for i in range(1,maxVal):
+            displayImage[pixelRow][pixelCol-i] = newColor
         
         # pad image to ensure display proper
         displayImage = np.pad(displayImage, ((numSurroundingPixels+1, numSurroundingPixels+1), (numSurroundingPixels+1, numSurroundingPixels+1), (0,0)))
@@ -171,7 +172,7 @@ class MyWindow(QMainWindow):
     def CalculateSampleSize(self, alpha, MOE, e_moe, d) -> list:
         W_h = 1 / self.numStrata_N**2 # Value constant because image is split evenly. small differences neglected
         initialGuesses = np.ones(self.numStrata_N**2) * 0.5 # TODO: Replace this with AIVA
-        initialStrataProportion = 0.5 # TODO: Use actual calculation when implementing AIVA
+        initialStrataProportion = np.sum(initialGuesses) * self.N_h / self.N
         variance = np.sum(W_h * np.sqrt(initialGuesses * (1 - initialGuesses)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * initialGuesses * (1 - initialGuesses))) # highest variance given the initial guesses, assuming only one point taken per stratum
         upperCL = 1.0
         lowerCL = 0.0
@@ -217,6 +218,7 @@ class MyWindow(QMainWindow):
 
         return n_h
 
+    # FIXME: Upper CL was lower than lower CL
     # Higher A_U yields lower sum
     def UpperCL_A(self, n, upperBound, alpha):
         # Pr(a,a' | A, A') = (A a) x (A' a') / (N n)
@@ -331,7 +333,6 @@ class MyWindow(QMainWindow):
         else:
             pass
     
-    # FIXME: Out of bounds error on 347 and 366
     def RecordDataPoint(self, value):
         # -1 is go back
         if value == -1 and self.sampleIndex > 0: # move back one sample
@@ -362,8 +363,11 @@ class MyWindow(QMainWindow):
                 saveFileName = f"{self.saveDir}/{os.path.splitext(os.path.basename(self.imageName))[0]}_{self.numGrids}GridPoints_countData.csv"
             with open(saveFileName, "a") as f:
                 for i, n in enumerate(self.n_h):
-                    bounds = [np.cumsum(self.n_h[:i]), np.cumsum(self.n_h[:i]) + n]
-                    p_h.append(np.average(self.poreData[bounds]))
+                    if i == 0:
+                        bounds = [0, n]
+                    else:
+                        bounds = [np.cumsum(self.n_h[:i])[-1], np.cumsum(self.n_h[:i])[-1] + n]
+                    p_h.append(np.average(self.poreData[bounds[0]:bounds[1]]))
 
                 p_st = np.sum(p_h) * self.N_h / self.N
 
@@ -377,9 +381,9 @@ class MyWindow(QMainWindow):
                     fmt="%.2f", 
                     delimiter=",", 
                     header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {self.numGrids} samples across {self.numStrata_N**2} strata. \n alpha = {self.alpha} \n MOE = {self.MOE} \n e_moe = {self.e_moe} \n d = {self.d}",
-                    footer=f"\n Porosity: {p_st[i] * 100}% \n {1-self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {upperCL - lowerCL / 2}")
+                    footer=f"\n Porosity: {p_st * 100}% \n {1-self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {upperCL - lowerCL / 2}")
                 
-            print(f"\n Porosity: {p_st[i] * 100}% \n {1-self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {upperCL - lowerCL / 2}")
+            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(1-self.alpha)}% CI: ({lowerCL:.3f}, {upperCL:.3f}) \n MOE: {upperCL - lowerCL / 2:.3f}")
             quit()
 
         newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
@@ -422,7 +426,7 @@ def Directory(dirname):
         SingleImage(f"{dirname}/{file}", numberOfGridPoints, numGrids)
 
 def main():
-    SingleImage("ManualCountTool/TestData/BSE_A_5kx_116.jpg")
+    SingleImage("./ManualCountTool/simPores.png")
     # Directory("/Users/mmika/Desktop/dividedImages")
 
 if __name__ == "__main__":
