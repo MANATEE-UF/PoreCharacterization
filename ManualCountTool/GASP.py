@@ -3,8 +3,8 @@ import scipy.special
 from skimage import io
 from skimage.color import gray2rgb
 import matplotlib
-matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
+matplotlib.use("Qt5Agg")
 from PyQt5 import QtWidgets, QtGui, QtCore
 from PyQt5.QtWidgets import QApplication, QMainWindow
 import sys
@@ -68,7 +68,7 @@ class MplCanvas(FigureCanvasQTAgg):
 
 class MyWindow(QMainWindow):
 
-    def __init__(self, imagePath, numStrata_N, saveDir=None):
+    def __init__(self, imagePath, numStrata_N, alpha, MOE, e_moe, saveDir=None):
         super(MyWindow,self).__init__()
 
         self.saveDir = saveDir
@@ -144,9 +144,9 @@ class MyWindow(QMainWindow):
         
         self.numSurroundingPixels = 50
 
-        self.alpha = 0.05
-        self.MOE = 0.15
-        self.e_moe = 0.30
+        self.alpha = alpha
+        self.MOE = MOE
+        self.e_moe = e_moe
         self.d = 0.5
 
         self.n_h = self.CalculateSampleSize(self.alpha, self.MOE, self.e_moe, self.d)
@@ -164,6 +164,8 @@ class MyWindow(QMainWindow):
 
         self.sc.axes.cla()
         self.sc.axes.imshow(displayImage)
+        self.sc.axes.set_yticks([])
+        self.sc.axes.set_xticks([])
         self.sc.draw()
 
         self.widget.setFocus(QtCore.Qt.NoFocusReason)
@@ -171,17 +173,17 @@ class MyWindow(QMainWindow):
     # Returns a list of optimal strata sample size (n_h)
     def CalculateSampleSize(self, alpha, MOE, e_moe, d) -> list:
         W_h = 1 / self.numStrata_N**2 # Value constant because image is split evenly. small differences neglected
-        initialGuesses = np.ones(self.numStrata_N**2) * 0.5 # TODO: Replace this with AIVA
+        initialGuesses = np.ones(self.numStrata_N**2) * 0.2 # TODO: Replace this with AIVA
         initialStrataProportion = np.sum(initialGuesses) * self.N_h / self.N
         variance = np.sum(W_h * np.sqrt(initialGuesses * (1 - initialGuesses)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * initialGuesses * (1 - initialGuesses))) # highest variance given the initial guesses, assuming only one point taken per stratum
         upperCL = 1.0
         lowerCL = 0.0
         withinTolerance = False
         while not withinTolerance:
-            n_0 = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance)
-            n = n_0 / (1 + (np.sum(W_h * initialGuesses * (1-initialGuesses))) / (self.myMap.numPixels * variance))
-            upperCL = self.UpperCL_A(int(n), int(np.ceil(initialStrataProportion * n)), alpha) / self.myMap.numPixels
-            lowerCL = self.LowerCL_A(int(n), int(np.ceil(initialStrataProportion * n)), int(n), alpha) / self.myMap.numPixels
+            n = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance)
+            n = int(np.ceil(n))
+            upperCL = self.UpperCL_A(n, initialStrataProportion, alpha) / n
+            lowerCL = self.LowerCL_A(n, initialStrataProportion, alpha) / n
 
             if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
                 variance *= d
@@ -189,15 +191,45 @@ class MyWindow(QMainWindow):
                 pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
                 if pctDiff > e_moe: # variance too low, overestimating how many sample points needed
                     variance /= d
-                    d /= 2
+                    d += (1-d)/2
                     variance *= d
                 else:
                     withinTolerance = True
             
-            print(((upperCL - lowerCL) / 2))
-            print(abs((((upperCL - lowerCL) / 2) - MOE) / MOE))
-        n = int(np.ceil(n))
+            print(f"MOE:{((upperCL - lowerCL) / 2):.3f}")
 
+        # n_h = self.ProportionalAllocation(n)
+        n_h = self.OptimalAllocation(n)
+
+        print(f"{np.sum(n_h)} samples needed to achieve {MOE} MOE with {100*(alpha)}% CI")
+
+        print(n_h)
+
+        return n_h
+
+    def UpperCL_A(self, n, p, alpha):
+        sum = 0
+        A_U = 0
+        while sum <= alpha + (1-alpha)/2:
+            A_U += 1
+            sum = 0
+            for i in range(A_U):
+                sum += scipy.special.comb(n, i, exact=True) * np.power(p,i) * np.power((1-p),n-i)
+        
+        return A_U-1
+
+    def LowerCL_A(self, n, p, alpha):
+        sum = 1.0
+        A_L = 0
+        while sum > alpha + (1-alpha)/2:
+            A_L += 1
+            sum = 0
+            for i in range(A_L, n):
+                sum += scipy.special.comb(n, i, exact=True) * np.power(p,i) * np.power((1-p),n-i)
+        
+        return A_L-1
+    
+    def OptimalAllocation(self, n):
         strataVars = np.empty(self.numStrata_N**2)
         cnt = 0
         for i in range(self.numStrata_N):
@@ -212,42 +244,16 @@ class MyWindow(QMainWindow):
         n_h = np.empty(self.numStrata_N**2)
 
         n_h = np.ceil(n * self.N_h * strataVars / np.sum(self.N_h * strataVars)).astype(int)
-        print(f"{np.sum(n_h)} samples needed to achieve {MOE} MOE with {100*(1-alpha)}% CI")
-
-        print(n_h)
 
         return n_h
 
-    # FIXME: Upper CL was lower than lower CL
-    # Higher A_U yields lower sum
-    def UpperCL_A(self, n, upperBound, alpha):
-        # Pr(a,a' | A, A') = (A a) x (A' a') / (N n)
-        probDistribution = 1.0
-        A_U = upperBound # Ensures A_U always greater than i # TODO: May need to revise logic here
-        while probDistribution > alpha:
-            A_U += 10
-            sum = 0
-            for i in range(upperBound):
-                sum += scipy.special.comb(A_U, i, exact=True) * scipy.special.comb(self.N - A_U, n-i, exact=True) / scipy.special.comb(self.N, n, exact=True)
+    def ProportionalAllocation(self, n):
+        n_h = np.ones(self.numStrata_N**2) * (n/self.numStrata_N**2)
 
-            probDistribution = sum
-        
-        return A_U
-    
-    # Higher A_L yields higher sum
-    def LowerCL_A(self, n, lowerBound, upperBound, alpha):
-        probDistribution = 0.0
-        A_L = upperBound
-        while probDistribution <= alpha:
-            A_L += 10
-            sum = 0
-            for i in range(lowerBound, upperBound):
-                sum += scipy.special.comb(A_L, i, exact=True) * scipy.special.comb(self.N - A_L, n-i, exact=True) / scipy.special.comb(self.N, n, exact=True)
-            
-            probDistribution = sum
-        
-        return A_L-1
-    
+        n_h = np.ceil(n_h).astype(int)
+
+        return n_h
+
     # Returns a 2D list of pixel positions
     # First axis is strata axis, second axis is sample axis
     def SampleImage(self, n_h):
@@ -277,6 +283,8 @@ class MyWindow(QMainWindow):
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
+        self.sc.axes.set_yticks([])
+        self.sc.axes.set_xticks([])
         self.sc.draw()
 
         if self.numSurroundingPixels >= 300:
@@ -299,6 +307,8 @@ class MyWindow(QMainWindow):
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
+        self.sc.axes.set_yticks([])
+        self.sc.axes.set_xticks([])
         self.sc.draw()
 
         if self.numSurroundingPixels == 25:
@@ -373,17 +383,17 @@ class MyWindow(QMainWindow):
 
                 # variance = (1 / self.N)**2 * np.sum((self.N_h**2 * (self.N_h-self.n_h) * p_h * (1-p_h)) / ((self.N_h-1) * self.n_h))
 
-                upperCL = self.UpperCL_A(self.numGrids, int(np.round(p_st*n)), self.alpha) / self.N
-                lowerCL = self.LowerCL_A(self.numGrids, int(np.round(p_st*n)), self.numGrids, self.alpha) / self.N
+                upperCL = self.UpperCL_A(self.numGrids, p_st, self.alpha) / self.numGrids
+                lowerCL = self.LowerCL_A(self.numGrids, p_st, self.alpha) / self.numGrids
 
                 np.savetxt(f, 
                     p_h, 
                     fmt="%.2f", 
                     delimiter=",", 
                     header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {self.numGrids} samples across {self.numStrata_N**2} strata. \n alpha = {self.alpha} \n MOE = {self.MOE} \n e_moe = {self.e_moe} \n d = {self.d}",
-                    footer=f"\n Porosity: {p_st * 100}% \n {1-self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {upperCL - lowerCL / 2}")
+                    footer=f"\n Porosity: {p_st * 100}% \n {self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {(upperCL - lowerCL) / 2}")
                 
-            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(1-self.alpha)}% CI: ({lowerCL:.3f}, {upperCL:.3f}) \n MOE: {upperCL - lowerCL / 2:.3f}")
+            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({lowerCL:.3f}, {upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f}")
             quit()
 
         newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
@@ -391,6 +401,8 @@ class MyWindow(QMainWindow):
 
         self.sc.axes.cla()
         self.sc.axes.imshow(newImage)
+        self.sc.axes.set_yticks([])
+        self.sc.axes.set_xticks([])
         self.sc.draw()
 
 def SingleImage(filename):
@@ -398,7 +410,7 @@ def SingleImage(filename):
     app.setStyle("Fusion")
 
     strataGrid_N = 4
-    win = MyWindow(filename, strataGrid_N)
+    win = MyWindow(filename, strataGrid_N, alpha=0.95, MOE=0.05, e_moe=0.05)
 
     win.show()
     sys.exit(app.exec_())
@@ -426,7 +438,7 @@ def Directory(dirname):
         SingleImage(f"{dirname}/{file}", numberOfGridPoints, numGrids)
 
 def main():
-    SingleImage("./ManualCountTool/simPores.png")
+    SingleImage("./ManualCountTool/simPores_21PctPorosity.png")
     # Directory("/Users/mmika/Desktop/dividedImages")
 
 if __name__ == "__main__":
