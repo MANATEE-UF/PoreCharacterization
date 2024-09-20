@@ -211,14 +211,14 @@ def mixedclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, bou
 if __name__ == "__main__":
     #set desired number of images, porosity, image size, size distribution, and orientation
     num_images = 1
-    set_porosity = 10 #units: percent
+    set_porosity = 50 #units: percent
     image_size_x = 512 #units: pixels
     image_size_y = 512 #units: pixels
     porosity_area = (set_porosity/100)*image_size_x * image_size_y #units: pixels^2
     #options for size_dist are: 'small', 'medium', 'large', and 'mixed' (for random number of all sizes)
-    size_dist = 'mixed'
+    size_dist = 'large'
     #options for orientation are: 'random' or 'clustered' (for pores clustered in one area of the image)
-    orientation = 'clustered'
+    orientation = 'random'
 
     if orientation == 'random':
         if size_dist == 'small':
