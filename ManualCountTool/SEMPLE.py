@@ -59,6 +59,10 @@ class PixelMap:
 
         return displayImage
 
+    def GetCroppedImage(self, leftBound, rightBound, topBound, bottomBound):
+        return self.originalImage[topBound:bottomBound, leftBound:rightBound]
+
+
 class MplCanvas(FigureCanvasQTAgg):
 
     def __init__(self, parent=None, width=5, height=4, dpi=100):
@@ -66,14 +70,114 @@ class MplCanvas(FigureCanvasQTAgg):
         self.axes = fig.add_subplot(111)
         super(MplCanvas, self).__init__(fig)
 
-class MyWindow(QMainWindow):
 
-    def __init__(self, imagePath, numStrata_N, alpha, MOE, e_moe, saveDir=None):
-        super(MyWindow,self).__init__()
+class InitialGuessWidget(QtWidgets.QWidget):
+    
+    def __init__(self, parentTab, imagePath, numStrata_N):
+        super(InitialGuessWidget,self).__init__()
+
+        self.imagePath = imagePath
+        self.numStrata_N = numStrata_N
+        self.strataIndex = 0
+        self.initialGuesses = []
+
+        self.parentTab = parentTab
+        
+        # 5, 12.5, 25, 50, 75, 87.5, 95
+        self.fivePctButton = QtWidgets.QPushButton("5%")
+        self.fivePctButton.clicked.connect(lambda: self.LogEstimate(0.05))
+        self.twelvePctButton = QtWidgets.QPushButton("12.5%")
+        self.twelvePctButton.clicked.connect(lambda: self.LogEstimate(0.125))
+        self.twntyFivePctButton = QtWidgets.QPushButton("25%")
+        self.twntyFivePctButton.clicked.connect(lambda: self.LogEstimate(0.25))
+        self.fiftyPctButton = QtWidgets.QPushButton("50%")
+        self.fiftyPctButton.clicked.connect(lambda: self.LogEstimate(0.50))
+        self.seventyFivePctButton = QtWidgets.QPushButton("75%")
+        self.seventyFivePctButton.clicked.connect(lambda: self.LogEstimate(0.75))
+        self.eightySevenPctButton = QtWidgets.QPushButton("75%")
+        self.eightySevenPctButton.clicked.connect(lambda: self.LogEstimate(0.875))
+        self.ninetyFivePctButton = QtWidgets.QPushButton("95%")
+        self.ninetyFivePctButton.clicked.connect(lambda: self.LogEstimate(0.95))
+
+        hbox = QtWidgets.QHBoxLayout()
+        hbox.addWidget(self.fivePctButton)
+        hbox.addWidget(self.twelvePctButton)
+        hbox.addWidget(self.twntyFivePctButton)
+        hbox.addWidget(self.fiftyPctButton)
+        hbox.addWidget(self.seventyFivePctButton)
+        hbox.addWidget(self.eightySevenPctButton)
+        hbox.addWidget(self.ninetyFivePctButton)
+        
+        self.buttonRegion = QtWidgets.QWidget()
+        self.buttonRegion.setLayout(hbox)
+
+        vbox = QtWidgets.QVBoxLayout()
+
+        self.sc = MplCanvas(self, width=7, height=7, dpi=100)
+        vbox.addWidget(self.sc)
+        vbox.addWidget(self.buttonRegion)
+        self.setLayout(vbox)
+
+        self.originalImage = io.imread(imagePath, as_gray=True)
+
+        self.myMap = PixelMap(self.originalImage)
+        self.N = self.myMap.numPixels
+
+        self.leftBounds = []
+        self.rightBounds = []
+        self.topBounds = []
+        self.bottomBounds = []
+
+        for i in range(self.numStrata_N):
+            topBound = int(i*self.myMap.rows/self.numStrata_N)
+            bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
+            for j in range(self.numStrata_N):
+                leftBound = int(j*self.myMap.cols/self.numStrata_N)
+                rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
+
+                self.leftBounds.append(leftBound)
+                self.rightBounds.append(rightBound)
+                self.topBounds.append(topBound)
+                self.bottomBounds.append(bottomBound)
+
+        self.sc.axes.cla()
+        self.sc.axes.imshow(self.myMap.GetCroppedImage(self.leftBounds[self.strataIndex], 
+                                                       self.rightBounds[self.strataIndex], 
+                                                       self.topBounds[self.strataIndex], 
+                                                       self.bottomBounds[self.strataIndex]),
+                                                       cmap="gray")
+        self.sc.axes.set_yticks([])
+        self.sc.axes.set_xticks([])
+        self.sc.draw()
+
+    def LogEstimate(self, value):
+        self.initialGuesses.append(value)
+
+        self.strataIndex += 1
+
+        if self.strataIndex == self.numStrata_N**2:
+            self.parentTab.MoveToNextWidget(np.array(self.initialGuesses))
+            return
+
+        self.sc.axes.cla()
+        self.sc.axes.imshow(self.myMap.GetCroppedImage(self.leftBounds[self.strataIndex], 
+                                                       self.rightBounds[self.strataIndex], 
+                                                       self.topBounds[self.strataIndex], 
+                                                       self.bottomBounds[self.strataIndex]),
+                                                       cmap="gray")
+        self.sc.axes.set_yticks([])
+        self.sc.axes.set_xticks([])
+        self.sc.draw()
+
+
+class PoreAnalysisWidget(QtWidgets.QWidget):
+
+    def __init__(self, parentTab, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe):
+        super(PoreAnalysisWidget, self).__init__()
+
+        self.parentTab = parentTab
 
         self.saveDir = saveDir
-
-        self.setWindowTitle("GASP")
 
         self.sc = MplCanvas(self, width=7, height=7, dpi=100)
 
@@ -129,18 +233,12 @@ class MyWindow(QMainWindow):
         hbox.addWidget(rightText)
         vbox.addLayout(hbox)
 
-        self.widget = QtWidgets.QWidget()
-        self.widget.setLayout(vbox)
-        self.setCentralWidget(self.widget)
-        
-        self.show()
-        
+        self.setLayout(vbox)
+
         self.imageName = imagePath
         image = io.imread(imagePath, as_gray=True)
         self.myMap = PixelMap(image)
         self.N = self.myMap.numPixels
-        self.numStrata_N = numStrata_N
-        self.N_h = int(self.N / self.numStrata_N**2)
         
         self.numSurroundingPixels = 50
 
@@ -148,10 +246,111 @@ class MyWindow(QMainWindow):
         self.MOE = MOE
         self.e_moe = e_moe
         self.d = 0.5
+        self.numStrata_N = numStrata_N
+        self.N_h = int(self.N / self.numStrata_N**2)
 
-        self.n_h = self.CalculateSampleSize(self.alpha, self.MOE, self.e_moe, self.d)
-        self.samplePositions = self.SampleImage(self.n_h)
-        self.numGrids = np.sum(self.n_h)
+    def InitializeCounting(self, initialGuesses):
+
+        # ############################################################################ #
+        # Calculate the total number of samples needed to acheieve specified precision #
+        # ############################################################################ #
+
+        W_h = 1 / self.numStrata_N**2 # Value constant because image is split evenly. small differences neglected
+        initialStrataProportion = np.sum(initialGuesses) * self.N_h / self.N
+        variance = np.sum(W_h * np.sqrt(initialGuesses * (1 - initialGuesses)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * initialGuesses * (1 - initialGuesses))) # highest variance given the initial guesses, assuming only one point taken per stratum
+        upperCL = 1.0
+        lowerCL = 0.0
+        withinTolerance = False
+        d = self.d
+        while not withinTolerance:
+            n = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance)
+            n = int(np.ceil(n))
+            upperCL = self.UpperCL_A(n, initialStrataProportion, self.alpha) / n
+            lowerCL = self.LowerCL_A(n, initialStrataProportion, self.alpha) / n
+
+            if ((upperCL - lowerCL) / 2) > self.MOE: # Eq.15 not satisfied
+                variance *= d
+            else: # Eq. 15 satisfied
+                pctDiff = abs((((upperCL - lowerCL) / 2) - self.MOE) / self.MOE)
+                if pctDiff > self.e_moe: # variance too low, overestimating how many sample points needed
+                    variance /= d
+                    d += (1-d)/2
+                    variance *= d
+                else:
+                    withinTolerance = True
+            
+            print(f"MOE:{((upperCL - lowerCL) / 2):.3f}")
+
+        # ###################################################### #
+        # Allocate the total number of samples across the strata #
+        # ###################################################### #
+
+        def OptimalAllocation(n):
+            strataVars = np.empty(self.numStrata_N**2)
+            cnt = 0
+            for i in range(self.numStrata_N):
+                topBound = int(i*self.myMap.rows/self.numStrata_N)
+                bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
+                for j in range(self.numStrata_N):
+                    leftBound = int(j*self.myMap.cols/self.numStrata_N)
+                    rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
+                    strataVars[cnt] = np.var(self.myMap.originalImage[topBound:bottomBound,leftBound:rightBound])
+                    cnt += 1
+
+            n_h = np.empty(self.numStrata_N**2)
+
+            n_h = np.ceil(n * self.N_h * strataVars / np.sum(self.N_h * strataVars)).astype(int)
+
+            return n_h
+
+        def ProportionalAllocation(n):
+            n_h = np.ones(self.numStrata_N**2) * (n/self.numStrata_N**2)
+
+            n_h = np.ceil(n_h).astype(int)
+
+            return n_h
+
+        # n_h = ProportionalAllocation(n)
+        n_h = OptimalAllocation(n)
+
+        print(f"{np.sum(n_h)} samples needed to achieve {self.MOE} MOE with {100*(self.alpha)}% CI")
+
+        print(n_h)
+
+        self.n_h = n_h
+
+        # ########################## #
+        # Get pixel sample locations #
+        # ########################## #
+
+        pixels = []
+        cnt = 0
+        for i in range(self.numStrata_N):
+            topBound = int(i*self.myMap.rows/self.numStrata_N)
+            bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
+            for j in range(self.numStrata_N):
+                leftBound = int(j*self.myMap.cols/self.numStrata_N)
+                rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
+
+                # FIXME: Because separating out x and y selection, sometimes n_h is greater than num pixels in x or y direction, thus ValueError
+                # randomY = np.random.choice(np.arange(topBound, bottomBound), n_h[cnt], replace=False) 
+                # randomX = np.random.choice(np.arange(leftBound, rightBound), n_h[cnt], replace=False)
+
+                random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h[cnt], replace=False)
+                random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                random[0,:] += topBound
+                random[1,:] += leftBound
+        
+                pixels.append(list(zip(random[0,:], random[1,:])))
+
+                cnt += 1
+        
+        self.samplePositions = pixels # First axis is strata axis, second axis is sample axis
+        self.numGrids = np.sum(n_h)
+
+        # ############# #
+        # Begin display #
+        # ############# #
 
         self.sampleIndex = 0
         self.strataIndex = 0
@@ -168,44 +367,7 @@ class MyWindow(QMainWindow):
         self.sc.axes.set_xticks([])
         self.sc.draw()
 
-        self.widget.setFocus(QtCore.Qt.NoFocusReason)
-    
-    # Returns a list of optimal strata sample size (n_h)
-    def CalculateSampleSize(self, alpha, MOE, e_moe, d) -> list:
-        W_h = 1 / self.numStrata_N**2 # Value constant because image is split evenly. small differences neglected
-        initialGuesses = np.ones(self.numStrata_N**2) * 0.2 # TODO: Replace this with AIVA
-        initialStrataProportion = np.sum(initialGuesses) * self.N_h / self.N
-        variance = np.sum(W_h * np.sqrt(initialGuesses * (1 - initialGuesses)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * initialGuesses * (1 - initialGuesses))) # highest variance given the initial guesses, assuming only one point taken per stratum
-        upperCL = 1.0
-        lowerCL = 0.0
-        withinTolerance = False
-        while not withinTolerance:
-            n = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance)
-            n = int(np.ceil(n))
-            upperCL = self.UpperCL_A(n, initialStrataProportion, alpha) / n
-            lowerCL = self.LowerCL_A(n, initialStrataProportion, alpha) / n
-
-            if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
-                variance *= d
-            else: # Eq. 15 satisfied
-                pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
-                if pctDiff > e_moe: # variance too low, overestimating how many sample points needed
-                    variance /= d
-                    d += (1-d)/2
-                    variance *= d
-                else:
-                    withinTolerance = True
-            
-            print(f"MOE:{((upperCL - lowerCL) / 2):.3f}")
-
-        # n_h = self.ProportionalAllocation(n)
-        n_h = self.OptimalAllocation(n)
-
-        print(f"{np.sum(n_h)} samples needed to achieve {MOE} MOE with {100*(alpha)}% CI")
-
-        print(n_h)
-
-        return n_h
+        self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
 
     def UpperCL_A(self, n, p, alpha):
         sum = 0
@@ -228,52 +390,6 @@ class MyWindow(QMainWindow):
                 sum += scipy.special.comb(n, i, exact=True) * np.power(p,i) * np.power((1-p),n-i)
         
         return A_L-1
-    
-    def OptimalAllocation(self, n):
-        strataVars = np.empty(self.numStrata_N**2)
-        cnt = 0
-        for i in range(self.numStrata_N):
-            topBound = int(i*self.myMap.rows/self.numStrata_N)
-            bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
-            for j in range(self.numStrata_N):
-                leftBound = int(j*self.myMap.cols/self.numStrata_N)
-                rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
-                strataVars[cnt] = np.var(self.myMap.originalImage[topBound:bottomBound,leftBound:rightBound])
-                cnt += 1
-
-        n_h = np.empty(self.numStrata_N**2)
-
-        n_h = np.ceil(n * self.N_h * strataVars / np.sum(self.N_h * strataVars)).astype(int)
-
-        return n_h
-
-    def ProportionalAllocation(self, n):
-        n_h = np.ones(self.numStrata_N**2) * (n/self.numStrata_N**2)
-
-        n_h = np.ceil(n_h).astype(int)
-
-        return n_h
-
-    # Returns a 2D list of pixel positions
-    # First axis is strata axis, second axis is sample axis
-    def SampleImage(self, n_h):
-        pixels = []
-        cnt = 0
-        for i in range(self.numStrata_N):
-            topBound = int(i*self.myMap.rows/self.numStrata_N)
-            bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
-            for j in range(self.numStrata_N):
-                leftBound = int(j*self.myMap.cols/self.numStrata_N)
-                rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
-
-                randomY = np.random.choice(np.arange(topBound, bottomBound), n_h[cnt], replace=False)
-                randomX = np.random.choice(np.arange(leftBound, rightBound), n_h[cnt], replace=False)
-
-                pixels.append(list(zip(randomY, randomX)))
-
-                cnt += 1
-        
-        return pixels
 
     def ZoomOut(self):
         if self.numSurroundingPixels < 300:
@@ -296,8 +412,6 @@ class MyWindow(QMainWindow):
             self.zoomInButton.setEnabled(False)
         else:
             self.zoomInButton.setEnabled(True)
-        
-        self.widget.setFocus(QtCore.Qt.NoFocusReason)
     
     def ZoomIn(self):
         if self.numSurroundingPixels > 25:
@@ -321,8 +435,6 @@ class MyWindow(QMainWindow):
         else:
             self.zoomOutButton.setEnabled(True)
         
-        self.widget.setFocus(QtCore.Qt.NoFocusReason)
-
     def keyPressEvent(self, event):
         if event.key() == QtCore.Qt.Key_Left:
             self.RecordDataPoint(0)
@@ -396,7 +508,8 @@ class MyWindow(QMainWindow):
             print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({lowerCL:.3f}, {upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f}")
             quit()
 
-        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
+        markerColor = (50, 225, 248)
+        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], markerColor, self.numSurroundingPixels)
         self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
 
         self.sc.axes.cla()
@@ -404,6 +517,37 @@ class MyWindow(QMainWindow):
         self.sc.axes.set_yticks([])
         self.sc.axes.set_xticks([])
         self.sc.draw()
+
+
+class MyWindow(QMainWindow):
+
+    def __init__(self, imagePath, numStrata_N, alpha, MOE, e_moe, saveDir=None):
+        super(MyWindow,self).__init__()
+
+        self.saveDir = saveDir
+
+        self.setWindowTitle("SEMPLE")
+
+        self.stackedWidget = QtWidgets.QStackedWidget()
+        self.setCentralWidget(self.stackedWidget)
+
+        self.widget1 = InitialGuessWidget(self, imagePath, numStrata_N)
+        self.widget2 = PoreAnalysisWidget(self, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe)
+
+        self.stackedWidget.addWidget(self.widget1)
+        self.stackedWidget.addWidget(self.widget2)
+        self.stackedWidget.setCurrentIndex(0)
+        
+        self.show()
+
+        self.stackedWidget.setFocus(QtCore.Qt.NoFocusReason)
+    
+    def MoveToNextWidget(self, initialGuesses):
+        # Update widget index
+        self.stackedWidget.setCurrentIndex(1)
+
+        # Initialize sampling using initial guesses from last tab
+        self.widget2.InitializeCounting(initialGuesses)
 
 def SingleImage(filename):
     app = QtWidgets.QApplication(sys.argv)
