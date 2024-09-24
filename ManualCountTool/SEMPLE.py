@@ -145,7 +145,7 @@ class InitialGuessWidget(QtWidgets.QWidget):
                                                        self.rightBounds[self.strataIndex], 
                                                        self.topBounds[self.strataIndex], 
                                                        self.bottomBounds[self.strataIndex]),
-                                                       cmap="gray")
+                                                       cmap="gray", vmin=0, vmax=255)
         self.sc.axes.set_yticks([])
         self.sc.axes.set_xticks([])
         self.sc.draw()
@@ -164,7 +164,7 @@ class InitialGuessWidget(QtWidgets.QWidget):
                                                        self.rightBounds[self.strataIndex], 
                                                        self.topBounds[self.strataIndex], 
                                                        self.bottomBounds[self.strataIndex]),
-                                                       cmap="gray")
+                                                       cmap="gray", vmin=0, vmax=255)
         self.sc.axes.set_yticks([])
         self.sc.axes.set_xticks([])
         self.sc.draw()
@@ -301,6 +301,9 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
             n_h = np.ceil(n * self.N_h * strataVars / np.sum(self.N_h * strataVars)).astype(int)
 
+            # Ensure that at least one point sampled per strata
+            n_h = np.maximum(n_h, 1)
+
             return n_h
 
         def ProportionalAllocation(n):
@@ -362,7 +365,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         displayImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
 
         self.sc.axes.cla()
-        self.sc.axes.imshow(displayImage)
+        self.sc.axes.imshow(displayImage, cmap="gray", vmin=0, vmax=255)
         self.sc.axes.set_yticks([])
         self.sc.axes.set_xticks([])
         self.sc.draw()
@@ -412,6 +415,8 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
             self.zoomInButton.setEnabled(False)
         else:
             self.zoomInButton.setEnabled(True)
+        
+        self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
     
     def ZoomIn(self):
         if self.numSurroundingPixels > 25:
@@ -434,6 +439,8 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
             self.zoomOutButton.setEnabled(False)
         else:
             self.zoomOutButton.setEnabled(True)
+        
+        self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
         
     def keyPressEvent(self, event):
         if event.key() == QtCore.Qt.Key_Left:
@@ -513,7 +520,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
 
         self.sc.axes.cla()
-        self.sc.axes.imshow(newImage)
+        self.sc.axes.imshow(newImage, cmap="gray", vmin=0, vmax=255)
         self.sc.axes.set_yticks([])
         self.sc.axes.set_xticks([])
         self.sc.draw()
@@ -582,7 +589,8 @@ def Directory(dirname):
         SingleImage(f"{dirname}/{file}", numberOfGridPoints, numGrids)
 
 def main():
-    SingleImage("./ManualCountTool/simPores_21PctPorosity.png")
+    # FIXME: Set bounds for heatmap so full matrix does not look black
+    SingleImage("random_image1.png")
     # Directory("/Users/mmika/Desktop/dividedImages")
 
 if __name__ == "__main__":
