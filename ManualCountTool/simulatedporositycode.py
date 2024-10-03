@@ -5,6 +5,7 @@ import math
 import random
 import numpy as np
 from PIL import Image, ImageDraw
+import os
 
 def ellipse_area(radius_x, radius_y):
     area = math.pi*radius_x*radius_y
@@ -228,55 +229,53 @@ def porositycalc(img_array, x, y):
                 porosity_array.append(i)
     filled_porosity = len(porosity_array)
     img_porosity = (filled_porosity/img_area)*100 #units in %
-    print(f"The real image porosity is: {img_porosity}")
+    # print(f"The real image porosity is: {img_porosity}")
     return img_porosity
 
-if __name__ == "__main__":
+def main(set_porosity, size_dist, orientation):
     #set desired number of images, porosity, image size, size distribution, and orientation
-    num_images = 1
-    set_porosity = 10 #units: percent
+    num_images = 20
     image_size_x = 1024 #units: pixels
     image_size_y = 1024 #units: pixels
     porosity_area = (set_porosity/100)*image_size_x * image_size_y #units: pixels^2
     #options for size_dist are: 'small', 'medium', 'large', and 'mixed' (for random number of all sizes)
-    size_dist = 'medium'
     #options for orientation are: 'random' or 'clustered' (for pores clustered in one area of the image)
-    orientation = 'random'
 
-    if orientation == 'random':
-        if size_dist == 'small':
-            for i in range(num_images):
+    dirName = f"Case_{set_porosity}_{size_dist}_{orientation}"
+    if not os.path.exists(dirName):
+        os.mkdir(dirName)
+
+    for i in range(num_images):
+        if orientation == 'random':
+            if size_dist == 'small':
                 random_image, real_porosity = small(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
-        elif size_dist == 'medium':
-            for i in range(num_images):
+            elif size_dist == 'medium':
                 random_image, real_porosity = medium(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
-        elif size_dist == 'large':
-            for i in range(num_images):
+            elif size_dist == 'large':
                 random_image, real_porosity = large(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
-        elif size_dist == 'mixed':
-            for i in range(num_images):
+            elif size_dist == 'mixed':
                 random_image, real_porosity = mixed(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
-    elif orientation == 'clustered':
-        #this creates a random size bounding box for pore placement on each image
-        boundingbox_x = random.randint(1, image_size_x)
-        boundingbox_y = random.randint(1, image_size_y)
-        if size_dist == 'small':
-            for i in range(num_images):
+        elif orientation == 'clustered':
+            #this creates a random size bounding box for pore placement on each image
+            boundingbox_x = random.randint(int(image_size_x/4), image_size_x)
+            boundingbox_y = random.randint(int(image_size_y/4), image_size_y)
+            if size_dist == 'small':
                 random_image, real_porosity = smallclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
-        elif size_dist == 'medium':
-            for i in range(num_images):
+            elif size_dist == 'medium':
                 random_image, real_porosity = mediumclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
-        elif size_dist == 'large':
-            for i in range(num_images):
+            elif size_dist == 'large':
                 random_image, real_porosity = largeclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
-        elif size_dist == 'mixed':
-            for i in range(num_images):
+            elif size_dist == 'mixed':
                 random_image, real_porosity = mixedclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
+        
+        random_image.save(f"{dirName}/image{i+1}_actualporosity{real_porosity:.2f}.png")
+    
+
+if __name__ == "__main__":
+    porosityVals = [5, 12.5, 25, 37.5, 50]
+    poreSizes = ["small", "medium", "large", "mixed"]
+    distributions = ["random", "clustered"]
+    for i in range(len(porosityVals)):
+        for j in range(len(poreSizes)):
+            for k in range(len(distributions)):
+                main(porosityVals[i], poreSizes[j], distributions[k])
