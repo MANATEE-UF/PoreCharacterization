@@ -43,7 +43,8 @@ def small(porosity_area, image_size_x, image_size_y):
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
 
 def medium(porosity_area, image_size_x, image_size_y):
     min_radius = 36/2 #units: pixels (chosen to allow to be seen using manual counting program)
@@ -64,10 +65,11 @@ def medium(porosity_area, image_size_x, image_size_y):
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
 
 def large(porosity_area, image_size_x, image_size_y):
-    min_radius = 52/2 #units: pixels (chosen to allow to be seen using manual counting program)
+    min_radius = 26 #units: pixels (chosen to allow to be seen using manual counting program)
     max_radius = 75 #units: pixels (arbitrarily chosen so that pores aren't ridiculously large)
     total_area = []
     drawn_positions = []
@@ -85,7 +87,8 @@ def large(porosity_area, image_size_x, image_size_y):
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
 
 def mixed(porosity_area, image_size_x, image_size_y):
     total_area = []
@@ -114,7 +117,8 @@ def mixed(porosity_area, image_size_x, image_size_y):
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
 
 def smallclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y):
     min_radius = 2 #units: pixels (chosen to allow to be seen using manual counting program)
@@ -135,7 +139,8 @@ def smallclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, bou
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
 
 def mediumclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y):
     min_radius = 36/2 #units: pixels (chosen to allow to be seen using manual counting program)
@@ -156,7 +161,8 @@ def mediumclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, bo
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
 
 def largeclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y):
     min_radius = 52/2 #units: pixels (chosen to allow to be seen using manual counting program)
@@ -177,7 +183,8 @@ def largeclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, bou
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
 
 def mixedclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y):
     total_area = []
@@ -206,55 +213,70 @@ def mixedclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, bou
                     (center_x + radius_x, center_y + radius_y)],
                     fill=rgba_value, outline=(255,255,255,255))
     img_array = np.array(img)
-    return Image.fromarray(img_array)
+    real_porosity = porositycalc(img_array, image_size_x, image_size_y)
+    return Image.fromarray(img_array), real_porosity
+
+def porositycalc(img_array, x, y):
+    porosity_array = []
+    img_area = x*y
+    #red = img_array[:, :, 0]
+    for row in img_array:
+        for pixel in row:
+            r, g, b, a = pixel
+            if r > 0:
+                i = 1
+                porosity_array.append(i)
+    filled_porosity = len(porosity_array)
+    img_porosity = (filled_porosity/img_area)*100 #units in %
+    print(f"The real image porosity is: {img_porosity}")
+    return img_porosity
 
 if __name__ == "__main__":
     #set desired number of images, porosity, image size, size distribution, and orientation
     num_images = 1
-    set_porosity = 50 #units: percent
-    image_size_x = 512 #units: pixels
-    image_size_y = 512 #units: pixels
+    set_porosity = 10 #units: percent
+    image_size_x = 1024 #units: pixels
+    image_size_y = 1024 #units: pixels
     porosity_area = (set_porosity/100)*image_size_x * image_size_y #units: pixels^2
     #options for size_dist are: 'small', 'medium', 'large', and 'mixed' (for random number of all sizes)
-    size_dist = 'large'
+    size_dist = 'medium'
     #options for orientation are: 'random' or 'clustered' (for pores clustered in one area of the image)
     orientation = 'random'
 
     if orientation == 'random':
         if size_dist == 'small':
             for i in range(num_images):
-                random_image = small(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}.png")
+                random_image, real_porosity = small(porosity_area, image_size_x, image_size_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
         elif size_dist == 'medium':
             for i in range(num_images):
-                random_image = medium(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}.png")
+                random_image, real_porosity = medium(porosity_area, image_size_x, image_size_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
         elif size_dist == 'large':
             for i in range(num_images):
-                random_image = large(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}.png")
+                random_image, real_porosity = large(porosity_area, image_size_x, image_size_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
         elif size_dist == 'mixed':
             for i in range(num_images):
-                random_image = mixed(porosity_area, image_size_x, image_size_y)
-                random_image.save(f"random_image{i+1}.png")
+                random_image, real_porosity = mixed(porosity_area, image_size_x, image_size_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
     elif orientation == 'clustered':
         #this creates a random size bounding box for pore placement on each image
         boundingbox_x = random.randint(1, image_size_x)
         boundingbox_y = random.randint(1, image_size_y)
         if size_dist == 'small':
             for i in range(num_images):
-                random_image = smallclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}.png")
+                random_image, real_porosity = smallclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
         elif size_dist == 'medium':
             for i in range(num_images):
-                random_image = mediumclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}.png")
+                random_image, real_porosity = mediumclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
         elif size_dist == 'large':
             for i in range(num_images):
-                random_image = largeclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}.png")
+                random_image, real_porosity = largeclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
         elif size_dist == 'mixed':
             for i in range(num_images):
-                random_image = mixedclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
-                random_image.save(f"random_image{i+1}.png")
-
+                random_image, real_porosity = mixedclustered(porosity_area, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
+                random_image.save(f"random_image{i+1}_actualporosity{real_porosity:.2f}.png")
