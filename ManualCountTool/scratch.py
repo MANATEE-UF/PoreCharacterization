@@ -13,6 +13,7 @@ def PlotSamplesPerInitialGuess():
     for i in range(21):
         porosityGuess = porosityGuesses[i]
         initialGuesses = np.ones(16) * porosityGuess
+        highVarGuess = np.ones(16) * 0.5
         numStrata_N = 4
         N=512*512
         MOE = 0.05
@@ -22,12 +23,12 @@ def PlotSamplesPerInitialGuess():
 
         W_h = 1 / numStrata_N**2 # Value constant because image is split evenly. small differences neglected
         initialStrataProportion = porosityGuess
-        variance = np.sum(W_h * np.sqrt(initialGuesses * (1 - initialGuesses)))**2 / numStrata_N**2 - ((1/N) * np.sum(W_h * initialGuesses * (1 - initialGuesses))) # highest variance given the initial guesses, assuming only one point taken per stratum
+        variance = np.sum(W_h * np.sqrt(highVarGuess * (1 - highVarGuess)))**2 / numStrata_N**2 - ((1/N) * np.sum(W_h * highVarGuess * (1 - highVarGuess))) # highest variance given the initial guesses. ensures that first guess is very small
         useUpper = False
         useLower = False
         if initialStrataProportion > 0.5 and MOE > 1-initialStrataProportion:
             useUpper = True
-            MOE = ((1-initialStrataProportion)+MOE) / 2 # TODO: Make decision regarding how to change MOE for upper and lower cases
+            MOE = ((1-initialStrataProportion)+MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
             # print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {MOE:.2f}")
         elif initialStrataProportion < 0.5 and MOE > initialStrataProportion:
             useLower = True
@@ -54,13 +55,14 @@ def PlotSamplesPerInitialGuess():
                 lowerCL /= n
                 upperCL /= n
 
+            # FIXME: Assumes that variance will always be too high to start. sometimes it starts too low, then d gets too small over time and eventually maxiters is reached
             if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
                 variance *= d
             else: # Eq. 15 satisfied
                 pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
                 if pctDiff > e_moe: # variance too low, overestimating how many sample points needed
                     variance /= d
-                    d += (1-d)/2
+                    d += (1-d)*0.2
                     variance *= d
                 else:
                     withinTolerance = True
@@ -88,10 +90,10 @@ def TwoSidedCL_A(n, p, alpha):
     while sum > alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
         A_L += 1
         sum = 0
-        for i in range(A_L, n):
+        for i in range(A_L, n+1):
             sum += scipy.special.comb(n, i, exact=True) * np.power(p,i) * np.power((1-p),n-i)
     
-    return A_L, A_U
+    return A_L-1, A_U-1
 
 def TopOneSidedCL_A(n, p, alpha):
     A_U = n
@@ -102,10 +104,10 @@ def TopOneSidedCL_A(n, p, alpha):
     while sum > alpha:
         A_L += 1
         sum = 0
-        for i in range(A_L, n):
+        for i in range(A_L, n+1):
             sum += scipy.special.comb(n, i, exact=True) * np.power(p,i) * np.power((1-p),n-i)
     
-    return A_L, A_U
+    return A_L-1, A_U
 
 def BottomOneSidedCL_A(n, p, alpha):
     sum = 0
@@ -118,7 +120,7 @@ def BottomOneSidedCL_A(n, p, alpha):
 
     A_L = 0
     
-    return A_L, A_U
+    return A_L, A_U-1
 
 def UpperCL_A(n, p, alpha):
     sum = 0
