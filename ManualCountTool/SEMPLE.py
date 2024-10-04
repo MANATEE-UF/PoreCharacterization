@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.special
+import scipy.stats
 from skimage import io
 from skimage.color import gray2rgb
 import matplotlib
@@ -83,18 +84,22 @@ class InitialGuessWidget(QtWidgets.QWidget):
 
         self.parentTab = parentTab
         
-        # 5, 12.5, 25, 50, 75, 87.5, 95
+        # 5, 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 95
         self.fivePctButton = QtWidgets.QPushButton("5%")
         self.fivePctButton.clicked.connect(lambda: self.LogEstimate(0.05))
         self.twelvePctButton = QtWidgets.QPushButton("12.5%")
         self.twelvePctButton.clicked.connect(lambda: self.LogEstimate(0.125))
         self.twntyFivePctButton = QtWidgets.QPushButton("25%")
         self.twntyFivePctButton.clicked.connect(lambda: self.LogEstimate(0.25))
+        self.thirtySevenPctButton = QtWidgets.QPushButton("37.5%")
+        self.thirtySevenPctButton.clicked.connect(lambda: self.LogEstimate(0.375))
         self.fiftyPctButton = QtWidgets.QPushButton("50%")
         self.fiftyPctButton.clicked.connect(lambda: self.LogEstimate(0.50))
+        self.sixtyTwoPctButton = QtWidgets.QPushButton("62.5%")
+        self.sixtyTwoPctButton.clicked.connect(lambda: self.LogEstimate(0.625))
         self.seventyFivePctButton = QtWidgets.QPushButton("75%")
         self.seventyFivePctButton.clicked.connect(lambda: self.LogEstimate(0.75))
-        self.eightySevenPctButton = QtWidgets.QPushButton("75%")
+        self.eightySevenPctButton = QtWidgets.QPushButton("87.5%")
         self.eightySevenPctButton.clicked.connect(lambda: self.LogEstimate(0.875))
         self.ninetyFivePctButton = QtWidgets.QPushButton("95%")
         self.ninetyFivePctButton.clicked.connect(lambda: self.LogEstimate(0.95))
@@ -103,7 +108,9 @@ class InitialGuessWidget(QtWidgets.QWidget):
         hbox.addWidget(self.fivePctButton)
         hbox.addWidget(self.twelvePctButton)
         hbox.addWidget(self.twntyFivePctButton)
+        hbox.addWidget(self.thirtySevenPctButton)
         hbox.addWidget(self.fiftyPctButton)
+        hbox.addWidget(self.sixtyTwoPctButton)
         hbox.addWidget(self.seventyFivePctButton)
         hbox.addWidget(self.eightySevenPctButton)
         hbox.addWidget(self.ninetyFivePctButton)
@@ -257,29 +264,41 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
         W_h = 1 / self.numStrata_N**2 # Value constant because image is split evenly. small differences neglected
         initialStrataProportion = np.sum(initialGuesses) * self.N_h / self.N
-        variance = np.sum(W_h * np.sqrt(initialGuesses * (1 - initialGuesses)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * initialGuesses * (1 - initialGuesses))) # highest variance given the initial guesses, assuming only one point taken per stratum
+        highVarGuess = np.ones(int(self.numStrata_N**2)) * 0.5
+        variance = np.sum(W_h * np.sqrt(highVarGuess * (1 - highVarGuess)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * highVarGuess * (1 - highVarGuess))) # highest variance given the initial guesses, assuming only one point taken per stratum
+        if initialStrataProportion > 0.5 and self.MOE > 1-initialStrataProportion:
+            self.MOE = ((1-initialStrataProportion)+self.MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
+            # print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {MOE:.2f}")
+        elif initialStrataProportion < 0.5 and self.MOE > initialStrataProportion:
+            self.MOE = (initialStrataProportion + self.MOE) / 2
+            # print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
         upperCL = 1.0
         lowerCL = 0.0
         withinTolerance = False
         d = self.d
-        while not withinTolerance:
-            n = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance)
+        currentIter = 0
+        maxIters = 100
+        currentIter = 0
+        while not withinTolerance and currentIter < maxIters:
+            n = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance) # smaller variance, higher n
             n = int(np.ceil(n))
-            upperCL = self.UpperCL_A(n, initialStrataProportion, self.alpha) / n
-            lowerCL = self.LowerCL_A(n, initialStrataProportion, self.alpha) / n
 
+            lowerCL, upperCL = self.TwoSidedCL_A(n, initialStrataProportion, self.alpha)
+            lowerCL /= n
+            upperCL /= n
+
+            # FIXME: Assumes that variance will always be too high to start. sometimes it starts too low, then d gets too small over time and eventually maxiters is reached
             if ((upperCL - lowerCL) / 2) > self.MOE: # Eq.15 not satisfied
                 variance *= d
             else: # Eq. 15 satisfied
                 pctDiff = abs((((upperCL - lowerCL) / 2) - self.MOE) / self.MOE)
                 if pctDiff > self.e_moe: # variance too low, overestimating how many sample points needed
                     variance /= d
-                    d += (1-d)/2
+                    d += (1-d)*0.2
                     variance *= d
                 else:
                     withinTolerance = True
-            
-            print(f"MOE:{((upperCL - lowerCL) / 2):.3f}")
+            currentIter += 1
 
         # ###################################################### #
         # Allocate the total number of samples across the strata #
@@ -372,27 +391,24 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
         self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
 
-    def UpperCL_A(self, n, p, alpha):
+    def TwoSidedCL_A(self, n, p, alpha):
         sum = 0
         A_U = 0
-        while sum <= alpha + (1-alpha)/2:
+        while sum <= alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
             A_U += 1
             sum = 0
             for i in range(A_U):
-                sum += scipy.special.comb(n, i, exact=True) * np.power(p,i) * np.power((1-p),n-i)
-        
-        return A_U-1
+                sum += scipy.stats.binom.pmf(i, n, p)
 
-    def LowerCL_A(self, n, p, alpha):
         sum = 1.0
         A_L = 0
-        while sum > alpha + (1-alpha)/2:
+        while sum > alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
             A_L += 1
             sum = 0
-            for i in range(A_L, n):
-                sum += scipy.special.comb(n, i, exact=True) * np.power(p,i) * np.power((1-p),n-i)
+            for i in range(A_L, n+1):
+                sum += scipy.stats.binom.pmf(i, n, p)
         
-        return A_L-1
+        return A_L-1, A_U-1
 
     def ZoomOut(self):
         if self.numSurroundingPixels < 300:
@@ -487,9 +503,9 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         if self.gridIndex >= self.numGrids:
             p_h = []
             if self.saveDir is None:
-                saveFileName = f"{os.path.splitext(os.path.basename(self.imageName))[0]}_{self.numGrids}GridPoints_countData.csv"
+                saveFileName = f"{os.path.splitext(os.path.basename(self.imageName))[0]}_countData.csv"
             else:
-                saveFileName = f"{self.saveDir}/{os.path.splitext(os.path.basename(self.imageName))[0]}_{self.numGrids}GridPoints_countData.csv"
+                saveFileName = f"{self.saveDir}/{os.path.splitext(os.path.basename(self.imageName))[0]}_countData.csv"
             with open(saveFileName, "a") as f:
                 for i, n in enumerate(self.n_h):
                     if i == 0:
@@ -502,8 +518,9 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
                 # variance = (1 / self.N)**2 * np.sum((self.N_h**2 * (self.N_h-self.n_h) * p_h * (1-p_h)) / ((self.N_h-1) * self.n_h))
 
-                upperCL = self.UpperCL_A(self.numGrids, p_st, self.alpha) / self.numGrids
-                lowerCL = self.LowerCL_A(self.numGrids, p_st, self.alpha) / self.numGrids
+                lowerCL, upperCL = self.TwoSidedCL_A(np.sum(self.n_h), p_st, self.alpha)
+                lowerCL /= np.sum(self.n_h)
+                upperCL /= np.sum(self.n_h)
 
                 np.savetxt(f, 
                     p_h, 
@@ -556,42 +573,21 @@ class MyWindow(QMainWindow):
         # Initialize sampling using initial guesses from last tab
         self.widget2.InitializeCounting(initialGuesses)
 
-def SingleImage(filename):
+
+def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    filename = "999355.png"
+    alpha = 0.95
+    MOE = 0.05
+    e_moe=0.01
     strataGrid_N = 4
-    win = MyWindow(filename, strataGrid_N, alpha=0.95, MOE=0.05, e_moe=0.05)
+
+    win = MyWindow(filename, strataGrid_N, alpha, MOE, e_moe)
 
     win.show()
     sys.exit(app.exec_())
-
-def Directory(dirname):
-    app = QtWidgets.QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    dirBaseName = os.path.basename(dirname)
-
-    files = os.listdir(dirname)
-
-    if not os.path.exists(f"{dirBaseName}_PROGRESS"):
-        os.mkdir(f"{dirBaseName}_PROGRESS")
-    else:
-        lastFileAnalyzed = f"{os.listdir(dirBaseName)[-1].split('_')[0]}.tif"
-        lastFileIdx = files.index(lastFileAnalyzed)
-        files = files[lastFileIdx+1:]
-
-    # Adjust the file name and number of grid points as needed
-    numberOfGridPoints = 100
-    numGrids = 3
-    
-    for file in files:
-        SingleImage(f"{dirname}/{file}", numberOfGridPoints, numGrids)
-
-def main():
-    # FIXME: Set bounds for heatmap so full matrix does not look black
-    SingleImage("random_image1.png")
-    # Directory("/Users/mmika/Desktop/dividedImages")
 
 if __name__ == "__main__":
     main()

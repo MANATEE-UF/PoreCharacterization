@@ -24,14 +24,10 @@ def PlotSamplesPerInitialGuess():
         W_h = 1 / numStrata_N**2 # Value constant because image is split evenly. small differences neglected
         initialStrataProportion = porosityGuess
         variance = np.sum(W_h * np.sqrt(highVarGuess * (1 - highVarGuess)))**2 / numStrata_N**2 - ((1/N) * np.sum(W_h * highVarGuess * (1 - highVarGuess))) # highest variance given the initial guesses. ensures that first guess is very small
-        useUpper = False
-        useLower = False
         if initialStrataProportion > 0.5 and MOE > 1-initialStrataProportion:
-            useUpper = True
             MOE = ((1-initialStrataProportion)+MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
             # print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {MOE:.2f}")
         elif initialStrataProportion < 0.5 and MOE > initialStrataProportion:
-            useLower = True
             MOE = (initialStrataProportion + MOE) / 2
             # print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
         upperCL = 1.0
@@ -42,18 +38,9 @@ def PlotSamplesPerInitialGuess():
         while not withinTolerance and currentIter < maxIters:
             n = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance) # smaller variance, higher n
             n = int(np.ceil(n))
-            if useUpper:
-                lowerCL, upperCL = TopOneSidedCL_A(n, initialStrataProportion, alpha)
-                lowerCL /= n
-                upperCL /= n
-            elif useLower:
-                lowerCL, upperCL = BottomOneSidedCL_A(n, initialStrataProportion, alpha)
-                lowerCL /= n
-                upperCL /= n
-            else:
-                lowerCL, upperCL = TwoSidedCL_A(n, initialStrataProportion, alpha)
-                lowerCL /= n
-                upperCL /= n
+            lowerCL, upperCL = TwoSidedCL_A(n, initialStrataProportion, alpha)
+            lowerCL /= n
+            upperCL /= n
 
             # FIXME: Assumes that variance will always be too high to start. sometimes it starts too low, then d gets too small over time and eventually maxiters is reached
             if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
