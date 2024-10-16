@@ -12,9 +12,8 @@ from scipy.ndimage import zoom, binary_fill_holes
 from skimage.filters import gaussian, threshold_multiotsu, threshold_sauvola
 from skimage.morphology import binary_opening, binary_closing, binary_dilation, disk, ball
 from skimage.segmentation import morphological_chan_vese
+from skimage.transform import resize
 from tqdm import tqdm
-from mayavi import mlab
-from stl import mesh
 import meshlib.mrmeshpy as mr
 import meshlib.mrmeshnumpy as mrnumpy
 
@@ -268,11 +267,27 @@ def FFT_Filtering(filtered):
 
     return fftFiltered
 
-#Expands an image stack about the number of image slices in the stack by a factor of deltaZ 
-def ExpandImageStack(images, deltaZ):
-    print("Expanding image stack...")
-    return zoom(images, zoom=(round(deltaZ), 1, 1), order=2)
+#Deprecated method, over expands image as it can only do so by an integer scale factor
+# #Expands an image stack about the number of image slices in the stack by a factor of deltaZ 
+# def ExpandImageStack(images, deltaZ):
+#     print("Expanding image stack...")
+#     return zoom(images, zoom=(round(deltaZ), 1, 1), order=2)
 
+#Resizes the image stack such that the x, y, and z scales are all approximately equal (cannot be exact due to targetNumSlices needing to be an integer)
+#Uses bi-cubic interpolation to interpolate between actual image slices, can use bi-quartic (order=4) or bi-quintic (order=5) for smoother results (will be slower)
+def ExpandImageStack(images, sliceThickness, resolution):
+    print("Expanding image stack...")
+    
+    originalNumSlices = images.shape[0]
+    totalDepth = (originalNumSlices - 1) * sliceThickness
+    targetNumSlices = round((totalDepth / resolution) + 1)
+
+    newShape = (targetNumSlices, images.shape[1], images.shape[2])
+
+    resizedImages = resize(images, newShape, order=3, preserve_range=True, anti_aliasing=True)
+
+    return resizedImages
+   
 #Creates a mask-based image overlay
 def Imover(inputImage, mask, color=[255, 255, 255]):
     #Ensures formattedImage and mask are uint8 and binary data types respectively
@@ -452,9 +467,9 @@ def SauvolaThresholding(fftFiltered, deltaZ, contrastLowerPercentile, contrastUp
     
     return smooth, np.array(voids)
 
-def EdgeDetectionThresholding(fftFiltered, deltaZ, contrastLowerPercentile, contrastUpperPercentile, sigma, thresh1, thresh2):
+def EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, contrastLowerPercentile, contrastUpperPercentile, sigma, thresh1, thresh2):
     smooth = np.copy(fftFiltered)
-    smooth = ExpandImageStack(smooth, deltaZ)
+    smooth = ExpandImageStack(smooth, sliceThickness, resolution)
 
     voids = []
     for i, img in enumerate(tqdm(smooth, desc='Applying Edge Detection Image Threshold')):
@@ -492,18 +507,6 @@ def ThresholdCleaningMask(smooth, voids, imageStack = True):
         voids = binary_fill_holes(voids)
 
     return voids
-
-#Creates a very rudimentary 3D reconstruction of a binary 3D image stack using Mayavi
-def BasicReconstruction(voids):
-    #Assumes voids is binary:
-    voids = np.array(voids).astype(float)
-
-    print('Creating 3D display...')
-    mlab.figure()
-
-    mlab.contour3d(voids, colormap='binary')
-
-    mlab.show()   
     
 def LoopDecimation(obj, reductionFactor, initFaces):
     numRemainingFaces = initFaces
@@ -608,15 +611,19 @@ def SaveMeshAsSTL(obj, fileName, folderName, outDir):
             os.makedirs(folderPath)
 
         fileName = f'{fileName}.stl'
-        mr.saveMesh(obj, mr.Path(os.path.join(folderPath, fileName))) 
+        mr.saveMesh(obj, os.path.join(folderPath, fileName)) 
 
 def main():
-    inDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/Unprocessed/Stack3_D"
-    fftInDir ="C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D/FFTFiltered"
-    outDir = "C:/Users/Cade Finney/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/Stack3_D"
+    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Central"
+    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_MidRadial"
+    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Periphery"
+    
+    fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/FFTFiltered"
 
-    depth = 59/4.56
+    # binaryInDir = 
 
+    outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial"
+    
     # images = ReadImages(inDir, ".tif")
     # rotated = StackRotate(images, tiltAngle=-3.2)
     # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
@@ -626,22 +633,27 @@ def main():
 
     fftFiltered = ReadImages(fftInDir, ".tif")
 
-    testBatchSize = 1
+    resolution = 54.6 #nm/pixel
+    sliceThickness = 100 #nm
+
+    testBatchSize = 1 #On a scale of 0 to 1, 1 representing the entire image stack
     batchSize = round(len(fftFiltered)*testBatchSize)
     fftFiltered = np.copy(fftFiltered[:batchSize])
 
-    voids = EdgeDetectionThresholding(fftFiltered, depth, 0.01, 0.99, 2.0, 50, 100)
-    
-    # reconstruction = CreateMeshReconstruction(voids, 0.01, True)
-    # altReconstruction = AltCreateMeshReconstruction(voids, 0.01, True)
+    voids = EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, 0.01, 0.99, 2.0, 50, 100)
 
-    SaveImages(voids, 'PoreReconstructionImageStack', outDir)
+    SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
 
     voids = PadVoids(voids)
 
-    SaveImages(voids, 'PoreReconstructionImageStackPadded', outDir)
+    SaveImages(voids.astype(np.uint8)*255, 'BinaryStackPadded', outDir)
 
-    # SaveMeshAsSTL(altReconstruction, 'Stack3_DReducedALT', 'PoreReconstructionSTL', outDir)
+    # reconstruction = CreateMeshReconstruction(voids, 0.01, True)
+    altReconstruction = AltCreateMeshReconstruction(voids, 0.01, True)
+
+    SaveMeshAsSTL(altReconstruction, '91T_MidRadial_AccurateDepth', 'PoreReconstruction', outDir)
+
+    # binaryImages = ReadImages(binaryInDir, '.tif')
 
 if __name__ == "__main__":
     main()
