@@ -8,7 +8,7 @@ from scipy.signal import wiener
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 from matplotlib.widgets import RectangleSelector
 from PIL import Image
-from scipy.ndimage import zoom, binary_fill_holes
+from scipy.ndimage import binary_fill_holes, label, sum
 from skimage.filters import gaussian, threshold_multiotsu, threshold_sauvola
 from skimage.morphology import binary_opening, binary_closing, binary_dilation, disk, ball
 from skimage.segmentation import morphological_chan_vese
@@ -17,9 +17,9 @@ from tqdm import tqdm
 import meshlib.mrmeshpy as mr
 import meshlib.mrmeshnumpy as mrnumpy
 
-#Reads images from a given directory of images. Does not read any files that do not have the specified file extension
-#Assumes image filenames are in the format: filename_#.fileExtension where # is the number of the image
-def ReadImages(inDir, fileExtension):
+#Reads in grayscale images from a given directory of images. Does not read any files that do not have the specified file extension
+#Assumes image filenames are in the format: filename_#.fileExtension where # is the number of the image with leading 0s
+def ReadImages(inDir, fileExtension, convertToBinary=False):
     image_list = os.listdir(inDir)
     image_list = [file for file in image_list if file.endswith(fileExtension)]
     image_list.sort()
@@ -31,6 +31,10 @@ def ReadImages(inDir, fileExtension):
         images.append(image)
 
     images = np.array(images)
+    
+    #Converts image stack to binary if desired
+    if convertToBinary:
+        images[images > 0] = 1
 
     return images
 
@@ -613,47 +617,130 @@ def SaveMeshAsSTL(obj, fileName, folderName, outDir):
         fileName = f'{fileName}.stl'
         mr.saveMesh(obj, os.path.join(folderPath, fileName)) 
 
+def CalculatePoreFeatures(binaryImages, resolution, convertUnits=True):
+    #Check if binaryImages contains only 0 and 1, convert it to binary otherwise
+    if not np.array_equal(np.unique(binaryImages), [0, 1]):
+        #Warn user and automatically convert to binary
+        print("Warning: Input image stack was not in binary, automatically converting to binary.")
+        binaryImages[binaryImages > 0] = 1
+        
+    
+    #Use 6-connectivity
+    structure = np.array([[[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+                         [[0, 1, 0], [1, 1, 1], [0, 1, 0]],
+                         [[0, 0, 0], [0, 1, 0], [0, 0, 0]]])
+    
+    #Use specified connectivity to label pores within image
+    labeledMask, numPores = label(binaryImages, structure=structure)
+
+    #Calculate volumes of each pore in units of voxels using label mask
+    #Excludes background from being labeled
+    poreVolumes = sum(binaryImages, labeledMask, range(1, numPores + 1)) #voxels
+    
+    #Calculate equivalent radii of pores in pixels, assuming roughly spherical shape
+    poreRadii = np.zeros(len(poreVolumes))
+    poreRadii = np.cbrt(poreVolumes / (4 * np.pi / 3)) #pixels
+
+    #Calculate pore centroids (x, y, z coordinates in pixels)
+    regions = measure.regionprops(labeledMask)
+    poreCentroids = np.array([region.centroid for region in regions])
+    
+    if convertUnits:
+        #Scaling factor to convert from voxels to cubic microns, assuming resolution is given in nm/pixel
+        scale = (resolution * 0.001)**3
+
+        #Convert calculated pore volumes to cubic microns
+        poreVolumes *= scale
+        
+        #Convert calculated pore radii to microns
+        poreVolumes *= resolution * 0.001
+
+    return numPores, poreVolumes, poreRadii, poreCentroids
+
 def main():
+    ########## IO Directories And Image Data ##########
+
+    #Unprocessed Image Stack Input Directories:
     # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Central"
-    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_MidRadial"
+    inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_MidRadial"
     # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Periphery"
     
+    #FFT Filtered Image Stack Input Directories:
+    # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/FFTFiltered"
     fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/FFTFiltered"
+    # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/FFTFiltered"
 
-    # binaryInDir = 
+    #Binary Pore Mask Input Directories:
+    #Note: Must use unpadded directory! Padded directory is only used for mesh creation.
+    # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/BinaryStack"
+    binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BinaryStack"
+    # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/BinaryStack"
 
+    #Base Output Directories:
+    # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central"
     outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial"
-    
-    # images = ReadImages(inDir, ".tif")
-    # rotated = StackRotate(images, tiltAngle=-3.2)
-    # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
-    # cropped = StackCropping(shifted)
-    # filtered = NoiseReduction(cropped)
-    # fftFiltered = FFT_Filtering(filtered)
+    # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery"
 
-    fftFiltered = ReadImages(fftInDir, ".tif")
-
+    #Image Data:
     resolution = 54.6 #nm/pixel
     sliceThickness = 100 #nm
+    
 
-    testBatchSize = 1 #On a scale of 0 to 1, 1 representing the entire image stack
-    batchSize = round(len(fftFiltered)*testBatchSize)
-    fftFiltered = np.copy(fftFiltered[:batchSize])
 
-    voids = EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, 0.01, 0.99, 2.0, 50, 100)
+    # ########## Image Alignment And FFT Filtering ##########
 
-    SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
+    # images = ReadImages(inDir, ".tif")
 
-    voids = PadVoids(voids)
+    # rotated = StackRotate(images, tiltAngle=-3.2)
 
-    SaveImages(voids.astype(np.uint8)*255, 'BinaryStackPadded', outDir)
+    # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
 
-    # reconstruction = CreateMeshReconstruction(voids, 0.01, True)
-    altReconstruction = AltCreateMeshReconstruction(voids, 0.01, True)
+    # cropped = StackCropping(shifted)
 
-    SaveMeshAsSTL(altReconstruction, '91T_MidRadial_AccurateDepth', 'PoreReconstruction', outDir)
+    # filtered = NoiseReduction(cropped)
 
-    # binaryImages = ReadImages(binaryInDir, '.tif')
+    # fftFiltered = FFT_Filtering(filtered)
+
+
+
+    # ########## Image Thresholding And Mesh Creation ##########
+    
+    # fftFiltered = ReadImages(fftInDir, ".tif")
+
+    # testBatchSize = 1 #On a scale of 0 to 1, 1 representing the entire image stack (change only if smaller batch size is needed for testing)
+    # batchSize = round(len(fftFiltered)*testBatchSize)
+    # fftFiltered = np.copy(fftFiltered[:batchSize])
+
+    # voids = EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, 0.01, 0.99, 2.0, 50, 100)
+
+    # #Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
+    # # SaveImages(voids, 'BinaryStack', outDir)
+    # SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
+
+    # paddedVoids = PadVoids(voids)
+
+    # #Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
+    # # SaveImages(paddedVoids, 'BinaryStackPadded', outDir)
+    # # SaveImages(paddedVoids.astype(np.uint8)*255, 'BinaryStackPadded', outDir)
+    
+    # # reconstruction = CreateMeshReconstruction(paddedVoids, 0.01, True)
+    # altReconstruction = AltCreateMeshReconstruction(paddedVoids, 0.01, True)
+
+    # SaveMeshAsSTL(altReconstruction, '91T_MidRadial_99%_Reduced', 'PoreReconstruction', outDir)
+
+
+
+    ########## Pore Feature Calculations ##########
+    
+    binaryImages = ReadImages(binaryInDir, '.tif', convertToBinary=True)
+    
+    numPores, poreVolumes, poreRadii, poreCentroids= CalculatePoreFeatures(binaryImages, resolution, convertUnits=True)
+
+    print(f"Number of Pores: {numPores}")
+    
+    print(poreVolumes)
+    print(poreRadii)
+    print(poreCentroids)
 
 if __name__ == "__main__":
     main()
