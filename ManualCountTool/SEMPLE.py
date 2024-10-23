@@ -527,9 +527,9 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
                     fmt="%.2f", 
                     delimiter=",", 
                     header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {self.numGrids} samples across {self.numStrata_N**2} strata. \n alpha = {self.alpha} \n MOE = {self.MOE} \n e_moe = {self.e_moe} \n d = {self.d}",
-                    footer=f"\n Porosity: {p_st * 100}% \n {self.alpha}% CI: ({lowerCL, upperCL}) \n MOE: {(upperCL - lowerCL) / 2}")
+                    footer=f"\n Porosity: {p_st * 100}% \n {self.alpha}% CI: ({100*lowerCL, 100*upperCL}) \n MOE: {(upperCL - lowerCL) / 2}")
                 
-            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({lowerCL:.3f}, {upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f}")
+            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({100*lowerCL:.3f}, {100*upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f}")
             quit()
 
         markerColor = (50, 225, 248)
