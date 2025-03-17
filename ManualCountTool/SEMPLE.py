@@ -343,10 +343,13 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
         if self.useOptimalAlloc:
             n_h = OptimalAllocation(n)
+            print("Optimal Allocation:")
+            print()
         else:
             n_h = ProportionalAllocation(n)
-        
-
+            print("Proportional Allocation:")
+            print()
+                
         print(f"{np.sum(n_h)} samples needed to achieve {self.MOE} MOE with {100*(self.alpha)}% CI")
 
         print(n_h)
@@ -546,10 +549,6 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
                     header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {self.numGrids} samples across {self.numStrata_N**2} strata. \n alpha = {self.alpha} \n MOE = {self.MOE} \n e_moe = {self.e_moe} \n d = {self.d}",
                     footer=f"\n Porosity: {p_st * 100}% \n {self.alpha}% CI: ({100*lowerCL, 100*upperCL}) \n MOE: {(upperCL - lowerCL) / 2}")
             
-            if self.useOptimalAlloc:
-                print("Optimal Allocation:")
-            else:
-                print("Proportional Allocation:")
             print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({100*lowerCL:.3f}, {100*upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f} \n Variance: {variance:.10f}")
             print()
 
@@ -619,11 +618,16 @@ class MyWindow(QMainWindow):
             stratTest = scipy.stats.ttest_ind(self.optAlloc_p_st, self.propAlloc_p_st)
             allTest = scipy.stats.ttest_ind(self.optAlloc_all, self.propAlloc_all)
 
-            print(stratTest.statistic)
-            print(stratTest.pvalue)
+            print("Stratified p_h:")
+            print(f"t-test statistic: {stratTest.statistic}")
+            print(f"t-test p-value: {stratTest.pvalue}")
+            print()
 
-            print(allTest.statistic)
-            print(allTest.pvalue)
+            print("All samples p_h:")
+            print(f"t-test statistic: {allTest.statistic}")
+            print(f"t-test p-value: {allTest.pvalue}")
+            print()
+            
             quit()
         else:
             self.stackedWidget.setCurrentIndex(self.stackedWidget.currentIndex() + 1)
@@ -634,10 +638,8 @@ class MyWindow(QMainWindow):
 def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
-    
-    files = os.listdir("OptimalAllocationStudy")
-    files.sort()
-    filename = f"OptimalAllocationStudy/{files[0]}"
+
+    filename = "BSE_A_5kx_115.jpg"
     print(filename)
     alpha = 0.95
     MOE = 0.05
