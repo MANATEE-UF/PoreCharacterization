@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy
+import csv
 from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
 
 
@@ -315,8 +316,48 @@ def LowerCL_A(n, p, alpha):
     
     return A_L-1
 
-# Plot_n_ratio()
-# PlotSurface()
-PlotContour()
-# PlotSampleFractionPerInitialConditions()
-# PlotSamplesPerInitialGuess()
+def PlotSimResults():
+    plt.rc("axes", titlesize=20)
+    plt.rc("axes", labelsize=18)
+    plt.rc("xtick", labelsize=14)
+    plt.rc("ytick", labelsize=14)
+    categoryDict = {"random":{"small":0, "medium":1, "large":2, "mixed":3}, "clustered":{"small":4, "medium":5, "large":6, "mixed":7}}
+    colorDict = {0:"deeppink", 1:"orchid", 2:"lightsteelblue", 3:"cyan", 4:"springgreen", 5:"darkkhaki", 6:"darkorange", 7:"lightcoral"}
+    titleDict = {0:"Random, Small", 1:"Random, Medium", 2:"Random, Large", 3:"Random, Mixed", 4:"Clustered, Small", 5:"Clustered, Medium", 6:"Clustered, Large", 7:"Clustered, Mixed"}
+
+    fig,axs = plt.subplots(nrows=2, ncols=4)
+    with open('SimResults.csv', mode='r') as file:
+        csv_reader = csv.reader(file)
+        
+        # Iterate over each row in the CSV file
+        cnt = 0
+        for row in csv_reader:
+            if cnt==0:
+                cnt +=1
+                continue
+
+            idxToUse = categoryDict[row[5]][row[4]]
+            unravledIdx = np.unravel_index(idxToUse, (2,4))
+
+            axs[unravledIdx[0]][unravledIdx[1]].scatter(float(row[1]), float(row[3]), c=colorDict[idxToUse], label=f"{row[5]}, {row[4]}", edgecolors="k",s=125)    
+
+    axs[1][0].set_xlabel("Porosity (%)")
+    axs[1][1].set_xlabel("Porosity (%)")
+    axs[1][2].set_xlabel("Porosity (%)")
+    axs[1][3].set_xlabel("Porosity (%)")
+    axs[0][0].set_ylabel("Measurement Residual (%)")
+    axs[1][0].set_ylabel("Measurement Residual (%)")
+    cnt = 0
+    for ax in axs.flat:
+        ax.hlines(5, 0, 55, color="r")
+        ax.hlines(-5, 0, 55, color="r")
+        ax.set_ylim(-11, 11)
+        ax.set_xlim(0, 55)
+        ax.set_title(titleDict[cnt])
+        cnt += 1
+
+    # plt.rc("axes", titlesize=30)
+    # plt.rc("axes", labelsize=14)
+    plt.show()
+
+PlotSimResults()

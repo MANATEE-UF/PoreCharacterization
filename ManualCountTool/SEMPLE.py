@@ -13,6 +13,8 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import os
 
+# TODO: Look up table for all combinations of initial guesses for common MOE and alpha values (e.g., 5% and 95%)
+
 # Class used to aid in displaying the image with grid overlayed onto sampled pixels
 class PixelMap:
     def __init__(self,image:np.ndarray):
@@ -257,7 +259,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         self.alpha = alpha
         self.MOE = MOE
         self.e_moe = e_moe
-        self.d = 0.5
+        self.d = 0.9
         self.numStrata_N = numStrata_N
         self.N_h = int(self.N / self.numStrata_N**2)
 
@@ -267,16 +269,15 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         # Calculate the total number of samples needed to acheieve specified precision #
         # ############################################################################ #
 
-        W_h = 1 / self.numStrata_N**2 # Value constant because image is split evenly. small differences neglected
         initialStrataProportion = np.sum(initialGuesses) * self.N_h / self.N
-        highVarGuess = np.ones(int(self.numStrata_N**2)) * 0.5
-        variance = np.sum(W_h * np.sqrt(highVarGuess * (1 - highVarGuess)))**2 / self.numStrata_N**2 - ((1/self.N) * np.sum(W_h * highVarGuess * (1 - highVarGuess))) # highest variance given the initial guesses, assuming only one point taken per stratum
+        
         if initialStrataProportion > 0.5 and self.MOE > 1-initialStrataProportion:
             self.MOE = ((1-initialStrataProportion)+self.MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
-            # print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {MOE:.2f}")
+            print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
         elif initialStrataProportion < 0.5 and self.MOE > initialStrataProportion:
             self.MOE = (initialStrataProportion + self.MOE) / 2
-            # print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
+            print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
+        
         upperCL = 1.0
         lowerCL = 0.0
         withinTolerance = False
@@ -284,23 +285,21 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         currentIter = 0
         maxIters = 100
         currentIter = 0
+        n = self.numStrata_N ** 2
         while not withinTolerance and currentIter < maxIters:
-            n = np.sum(W_h * np.sqrt(initialGuesses * (1-initialGuesses)) / variance) # smaller variance, higher n
             n = int(np.ceil(n))
 
             lowerCL, upperCL = self.TwoSidedCL_A(n, initialStrataProportion, self.alpha)
             lowerCL /= n
             upperCL /= n
 
-            # FIXME: Assumes that variance will always be too high to start. sometimes it starts too low, then d gets too small over time and eventually maxiters is reached
             if ((upperCL - lowerCL) / 2) > self.MOE: # Eq.15 not satisfied
-                variance *= d
+                n /= d
             else: # Eq. 15 satisfied
                 pctDiff = abs((((upperCL - lowerCL) / 2) - self.MOE) / self.MOE)
-                if pctDiff > self.e_moe: # variance too low, overestimating how many sample points needed
-                    variance /= d
-                    d += (1-d)*0.2
-                    variance *= d
+                if pctDiff > self.e_moe: # overestimating how many sample points needed
+                    n *= d
+                    d += (1-d)*0.1
                 else:
                     withinTolerance = True
             currentIter += 1
@@ -310,6 +309,11 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         # ###################################################### #
 
         def OptimalAllocation(n):
+            W_h = 1/self.numStrata_N**2
+            
+            optRatio = (W_h * (np.sum(np.sqrt(initialGuesses * (1-initialGuesses))))**2) / (np.sum(initialGuesses * (1-initialGuesses)))
+            n *= optRatio
+
             strataVars = np.empty(self.numStrata_N**2)
             cnt = 0
             for i in range(self.numStrata_N):
