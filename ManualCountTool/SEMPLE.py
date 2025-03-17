@@ -163,6 +163,8 @@ class InitialGuessWidget(QtWidgets.QWidget):
         self.strataIndex += 1
 
         if self.strataIndex == self.numStrata_N**2:
+            print("Strata estimates:")
+            print(self.initialGuesses)
             self.parentTab.MoveToNextWidget(np.array(self.initialGuesses))
             return
 
@@ -179,10 +181,13 @@ class InitialGuessWidget(QtWidgets.QWidget):
 
 class PoreAnalysisWidget(QtWidgets.QWidget):
 
-    def __init__(self, parentTab, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe):
+    def __init__(self, parentTab, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe, widgetIndex, useOptimalAlloc=True):
         super(PoreAnalysisWidget, self).__init__()
 
         self.parentTab = parentTab
+        self.widgetIndex = widgetIndex
+
+        self.useOptimalAlloc = useOptimalAlloc
 
         self.saveDir = saveDir
 
@@ -332,8 +337,11 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
             return n_h
 
-        # n_h = ProportionalAllocation(n)
-        n_h = OptimalAllocation(n)
+        if self.useOptimalAlloc:
+            n_h = OptimalAllocation(n)
+        else:
+            n_h = ProportionalAllocation(n)
+        
 
         print(f"{np.sum(n_h)} samples needed to achieve {self.MOE} MOE with {100*(self.alpha)}% CI")
 
@@ -354,6 +362,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
                 leftBound = int(j*self.myMap.cols/self.numStrata_N)
                 rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
 
+                # TODO: Is below still a bug?
                 # FIXME: Because separating out x and y selection, sometimes n_h is greater than num pixels in x or y direction, thus ValueError
                 # randomY = np.random.choice(np.arange(topBound, bottomBound), n_h[cnt], replace=False) 
                 # randomX = np.random.choice(np.arange(leftBound, rightBound), n_h[cnt], replace=False)
@@ -459,6 +468,9 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
         
     def keyPressEvent(self, event):
+        if self.parentTab.stackedWidget.currentIndex() != self.widgetIndex:
+            return
+        
         if event.key() == QtCore.Qt.Key_Left:
             self.RecordDataPoint(0)
             self.lastEntryText.setText("Last Data Entry: 0")
@@ -516,7 +528,8 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
                 p_st = np.sum(p_h) * self.N_h / self.N
 
-                # variance = (1 / self.N)**2 * np.sum((self.N_h**2 * (self.N_h-self.n_h) * p_h * (1-p_h)) / ((self.N_h-1) * self.n_h))
+                p_h = np.array(p_h)
+                variance = (1 / self.N)**2 * np.sum((self.N_h**2 * (self.N_h-self.n_h) * p_h * (1-p_h)) / ((self.N_h-1) * self.n_h))
 
                 lowerCL, upperCL = self.TwoSidedCL_A(np.sum(self.n_h), p_st, self.alpha)
                 lowerCL /= np.sum(self.n_h)
@@ -528,9 +541,24 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
                     delimiter=",", 
                     header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {self.numGrids} samples across {self.numStrata_N**2} strata. \n alpha = {self.alpha} \n MOE = {self.MOE} \n e_moe = {self.e_moe} \n d = {self.d}",
                     footer=f"\n Porosity: {p_st * 100}% \n {self.alpha}% CI: ({100*lowerCL, 100*upperCL}) \n MOE: {(upperCL - lowerCL) / 2}")
-                
-            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({100*lowerCL:.3f}, {100*upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f}")
-            quit()
+            
+            if self.useOptimalAlloc:
+                print("Optimal Allocation:")
+            else:
+                print("Proportional Allocation:")
+            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({100*lowerCL:.3f}, {100*upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f} \n Variance: {variance:.10f}")
+            print()
+
+            if self.useOptimalAlloc:
+                self.parentTab.optAlloc_p_st = p_h
+                self.parentTab.optAlloc_all = self.poreData
+            else:
+                self.parentTab.propAlloc_p_st = p_h
+                self.parentTab.propAlloc_all = self.poreData
+            
+            self.parentTab.MoveToNextWidget()
+
+            return
 
         markerColor = (50, 225, 248)
         newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], markerColor, self.numSurroundingPixels)
@@ -545,10 +573,17 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
 class MyWindow(QMainWindow):
 
-    def __init__(self, imagePath, numStrata_N, alpha, MOE, e_moe, saveDir=None):
+    def __init__(self, imagePath, numStrata_N, alpha, MOE, e_moe, saveDir=None, useBothAllocations = False):
         super(MyWindow,self).__init__()
 
         self.saveDir = saveDir
+        self.useBothAllocations = useBothAllocations
+        self.initialGuesses = None
+
+        self.optAlloc_p_st = []
+        self.optAlloc_all = []
+        self.propAlloc_p_st = []
+        self.propAlloc_all = []
 
         self.setWindowTitle("SEMPLE")
 
@@ -556,35 +591,56 @@ class MyWindow(QMainWindow):
         self.setCentralWidget(self.stackedWidget)
 
         self.widget1 = InitialGuessWidget(self, imagePath, numStrata_N)
-        self.widget2 = PoreAnalysisWidget(self, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe)
+        self.widget2 = PoreAnalysisWidget(self, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe, widgetIndex=1)
 
         self.stackedWidget.addWidget(self.widget1)
         self.stackedWidget.addWidget(self.widget2)
+
+        if self.useBothAllocations:
+            self.widget3 = PoreAnalysisWidget(self, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe, widgetIndex=2, useOptimalAlloc=False)
+            self.stackedWidget.addWidget(self.widget3)
+        
         self.stackedWidget.setCurrentIndex(0)
         
         self.show()
 
         self.stackedWidget.setFocus(QtCore.Qt.NoFocusReason)
-    
-    def MoveToNextWidget(self, initialGuesses):
+
+    def MoveToNextWidget(self, initialGuesses=None):
+        if initialGuesses is not None:
+            self.initialGuesses = initialGuesses
+
         # Update widget index
-        self.stackedWidget.setCurrentIndex(1)
+        if self.stackedWidget.currentIndex()+1 == self.stackedWidget.count():
+            stratTest = scipy.stats.ttest_ind(self.optAlloc_p_st, self.propAlloc_p_st)
+            allTest = scipy.stats.ttest_ind(self.optAlloc_all, self.propAlloc_all)
 
-        # Initialize sampling using initial guesses from last tab
-        self.widget2.InitializeCounting(initialGuesses)
+            print(stratTest.statistic)
+            print(stratTest.pvalue)
 
+            print(allTest.statistic)
+            print(allTest.pvalue)
+            quit()
+        else:
+            self.stackedWidget.setCurrentIndex(self.stackedWidget.currentIndex() + 1)
+        
+        self.stackedWidget.currentWidget().InitializeCounting(self.initialGuesses)
 
+# TODO: Confirmation on last grid before submitting
 def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
-
-    filename = "999355.png"
+    
+    files = os.listdir("OptimalAllocationStudy")
+    files.sort()
+    filename = f"OptimalAllocationStudy/{files[0]}"
+    print(filename)
     alpha = 0.95
     MOE = 0.05
     e_moe=0.01
     strataGrid_N = 4
 
-    win = MyWindow(filename, strataGrid_N, alpha, MOE, e_moe)
+    win = MyWindow(filename, strataGrid_N, alpha, MOE, e_moe, useBothAllocations=True)
 
     win.show()
     sys.exit(app.exec_())
