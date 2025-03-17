@@ -280,7 +280,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         currentIter = 0
         maxIters = 100
         currentIter = 0
-        n = 16
+        n = self.numStrata_N ** 2
         while not withinTolerance and currentIter < maxIters:
             n = int(np.ceil(n))
 
