@@ -281,28 +281,34 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         upperCL = 1.0
         lowerCL = 0.0
         withinTolerance = False
-        d = self.d
         currentIter = 0
-        maxIters = 100
+        maxIters = 1000
         currentIter = 0
         n = self.numStrata_N ** 2
+        iterExponent = 1
+        d = 2 * 0.75**(iterExponent-1) + 1
         while not withinTolerance and currentIter < maxIters:
             n = int(np.ceil(n))
+            # print(n)
 
             lowerCL, upperCL = self.TwoSidedCL_A(n, initialStrataProportion, self.alpha)
             lowerCL /= n
             upperCL /= n
 
             if ((upperCL - lowerCL) / 2) > self.MOE: # Eq.15 not satisfied
-                n /= d
+                n *= d
             else: # Eq. 15 satisfied
                 pctDiff = abs((((upperCL - lowerCL) / 2) - self.MOE) / self.MOE)
                 if pctDiff > self.e_moe: # overestimating how many sample points needed
-                    n *= d
-                    d += (1-d)*0.1
+                    n /= d
+                    iterExponent += 1
+                    d = 2 * 0.75**(iterExponent-1) + 1
                 else:
                     withinTolerance = True
             currentIter += 1
+        
+        if currentIter == maxIters:
+            raise(RuntimeError("Max Iterations reached"))
 
         # ###################################################### #
         # Allocate the total number of samples across the strata #
