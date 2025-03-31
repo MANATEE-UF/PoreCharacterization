@@ -316,7 +316,7 @@ def LowerCL_A(n, p, alpha):
     
     return A_L-1
 
-def PlotSimResults():
+def PlotSimResiduals():
     plt.rc("axes", titlesize=20)
     plt.rc("axes", labelsize=18)
     plt.rc("xtick", labelsize=14)
@@ -326,7 +326,7 @@ def PlotSimResults():
     titleDict = {0:"Random, Small", 1:"Random, Medium", 2:"Random, Large", 3:"Random, Mixed", 4:"Clustered, Small", 5:"Clustered, Medium", 6:"Clustered, Large", 7:"Clustered, Mixed"}
 
     fig,axs = plt.subplots(nrows=2, ncols=4)
-    with open('SimResults.csv', mode='r') as file:
+    with open('key.csv', mode='r') as file:
         csv_reader = csv.reader(file)
         
         # Iterate over each row in the CSV file
@@ -336,10 +336,11 @@ def PlotSimResults():
                 cnt +=1
                 continue
 
-            idxToUse = categoryDict[row[5]][row[4]]
+            idxToUse = categoryDict[row[4]][row[3]]
             unravledIdx = np.unravel_index(idxToUse, (2,4))
 
-            axs[unravledIdx[0]][unravledIdx[1]].scatter(float(row[1]), float(row[3]), c=colorDict[idxToUse], label=f"{row[5]}, {row[4]}", edgecolors="k",s=125)    
+            axs[unravledIdx[0]][unravledIdx[1]].scatter(float(row[2]), float(row[6])-float(row[2]), c=colorDict[idxToUse], label=f"{row[4]}, {row[3]}", edgecolors="k",s=100)    
+            axs[unravledIdx[0]][unravledIdx[1]].scatter(float(row[2]), float(row[10])-float(row[2]), c=colorDict[idxToUse], label=f"{row[4]}, {row[3]}", edgecolors="k",s=100, marker="^")    
 
     axs[1][0].set_xlabel("Porosity (%)")
     axs[1][1].set_xlabel("Porosity (%)")
@@ -358,6 +359,186 @@ def PlotSimResults():
 
     # plt.rc("axes", titlesize=30)
     # plt.rc("axes", labelsize=14)
+    plt.show()
+
+def PlotSimSuccesses2():
+    plt.rcParams["font.family"] = "serif"
+    plt.rc("axes", labelsize=14)
+    plt.rc("xtick", labelsize=14)
+    plt.rc("ytick", labelsize=14)
+
+    categoryDict = {"5%":{"Small":{"Random":0,"Clustered":1},"Medium":{"Random":2,"Clustered":3},"Large":{"Random":4,"Clustered":5},"Mixed":{"Random":6,"Clustered":7}}, 
+                    "12.5%":{"Small":{"Random":8,"Clustered":9},"Medium":{"Random":10,"Clustered":11},"Large":{"Random":12,"Clustered":13},"Mixed":{"Random":14,"Clustered":15}}, 
+                    "25%":{"Small":{"Random":16,"Clustered":17},"Medium":{"Random":18,"Clustered":19},"Large":{"Random":20,"Clustered":21},"Mixed":{"Random":22,"Clustered":23}}, 
+                    "37.5%":{"Small":{"Random":24,"Clustered":25},"Medium":{"Random":26,"Clustered":27},"Large":{"Random":28,"Clustered":29},"Mixed":{"Random":30,"Clustered":31}}, 
+                    "50%":{"Small":{"Random":32,"Clustered":33},"Medium":{"Random":34,"Clustered":35},"Large":{"Random":36,"Clustered":37},"Mixed":{"Random":38,"Clustered":39}}}
+
+    counts = {"Optimal":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                      "Proportional":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}
+
+    with open('key.csv', mode='r') as file:
+        csv_reader = csv.reader(file)
+        
+        # Iterate over each row in the CSV file
+        cnt = 0
+        for row in csv_reader:
+            if cnt==0:
+                cnt +=1
+                continue
+            
+            idx = categoryDict[row[1] + "%"][row[3]][row[4]]
+
+            if float(row[7]) < float(row[2]) and float(row[2]) < float(row[8]):
+                counts["Optimal"][idx] += 1
+
+            if float(row[11]) < float(row[2]) and float(row[2]) < float(row[12]):
+                counts["Proportional"][idx] += 1
+
+    fig, ax = plt.subplots(layout='constrained')
+
+    x = np.arange(40)  # the label locations
+    offset = 0
+
+    for attribute, measurement in counts.items():
+        ax.scatter(x+offset, 100*np.array(measurement)/20, s=200, label=attribute, edgecolor="k")
+        ax.plot(x+offset, 100*np.array(measurement)/20)
+        offset += 0.1
+    
+    ax.set_xticks(x+0.05, np.arange(40))
+    ax.set_yticks(np.arange(85,105,5))
+    # Add some text for labels, title and custom x-axis tick labels, etc.
+    ax.set_ylabel('Percentage of Measurements Within MOE (%)')
+    ax.set_xlabel("Simulated Image Class ID")
+    plt.legend(bbox_to_anchor=(1.01,0.5))
+    
+    ax.set_ylim(84, 101)
+
+    plt.show()
+
+def PlotSimResults():
+    plt.rcParams["font.family"] = "serif"
+    plt.rc("axes", labelsize=14)
+    plt.rc("xtick", labelsize=14)
+    plt.rc("ytick", labelsize=14)
+
+    porosityDict = {"5%":0, "12.5%":1, "25%":2, "37.5%":3, "50%":4}
+    sizeDict = {"Small":0, "Medium":1, "Large":2, "Mixed":3}
+    distributionDict = {"Random":0, "Clustered":1}
+
+    countsPorosity = {"Optimal":[0,0,0,0,0],"Proportional":[0,0,0,0,0]}
+    countsSize = {"Optimal":[0,0,0,0],"Proportional":[0,0,0,0]}
+    countsDistribution = {"Optimal":[0,0],"Proportional":[0,0]}
+
+    ratioPorosity = [[], [], [], [], []]
+    ratioSize = [[], [], [], []]
+    ratioDistribution = [[], []]
+
+    with open('key.csv', mode='r') as file:
+        csv_reader = csv.reader(file)
+        
+        # Iterate over each row in the CSV file
+        cnt = 0
+        for row in csv_reader:
+            if cnt==0:
+                cnt +=1
+                continue
+
+            porosityIdx = porosityDict[row[1] + "%"]
+            sizeIdx = sizeDict[row[3]]
+            distIdx = distributionDict[row[4]]
+
+            ratioPorosity[porosityIdx].append(float(row[5]) / float(row[9]))
+            ratioDistribution[distIdx].append(float(row[5]) / float(row[9]))
+            ratioSize[sizeIdx].append(float(row[5]) / float(row[9]))
+
+            if float(row[7]) < float(row[2]) and float(row[2]) < float(row[8]):
+                countsPorosity["Optimal"][porosityIdx] += 1
+                countsSize["Optimal"][sizeIdx] += 1
+                countsDistribution["Optimal"][distIdx] += 1
+
+            if float(row[11]) < float(row[2]) and float(row[2]) < float(row[12]):
+                countsPorosity["Proportional"][porosityIdx] += 1
+                countsSize["Proportional"][sizeIdx] += 1
+                countsDistribution["Proportional"][distIdx] += 1
+
+    fig, ax = plt.subplots(2,3,layout='constrained')
+
+    x = np.arange(5)  # the label locations
+    width = 0.43  # the width of the bars
+    multiplier = 0
+
+    hatches = [None, "//"]
+
+    for attribute, measurement in countsPorosity.items():
+        offset = width * multiplier
+
+        rects = ax[0][0].bar(x + offset, 100*np.array(measurement)/160, width,label=attribute, edgecolor="k",hatch=hatches[multiplier])
+        ax[0][0].bar_label(rects, padding=2, fmt=lambda x: f'{x:.1f}')
+
+        multiplier += 1
+    
+    ax[0][0].set_xticks(x + width/2, list(porosityDict.keys()))
+
+    x = np.arange(4)  # the label locations
+    width = 0.4  # the width of the bars
+    multiplier = 0
+
+    for attribute, measurement in countsSize.items():
+        offset = width * multiplier
+
+        rects = ax[0][1].bar(x + offset, 100*np.array(measurement)/200, width, label=attribute, edgecolor="k", hatch=hatches[multiplier])
+        ax[0][1].bar_label(rects, padding=2, fmt=lambda x: f'{x:.1f}')
+
+        multiplier += 1
+    
+    ax[0][1].set_xticks(x + width/2, list(sizeDict.keys()))
+
+    x = np.arange(2)  # the label locations
+    width = 0.4  # the width of the bars
+    multiplier = 0
+
+    for attribute, measurement in countsDistribution.items():
+        offset = width * multiplier
+
+        rects = ax[0][2].bar(x + offset, 100*np.array(measurement)/400, width, label=attribute, edgecolor="k", hatch=hatches[multiplier])
+        ax[0][2].bar_label(rects, padding=2, fmt=lambda x: f'{x:.1f}')
+
+        multiplier += 1
+
+    # Add some text for labels, title and custom x-axis tick labels, etc.
+    ax[0][0].set_ylabel('Measurements Within MOE (%)')
+
+    ax[0][0].set_xlabel("Porosity")
+    ax[0][1].set_xlabel("Pore Sizes")
+    ax[0][2].set_xlabel("Pore Distribution")
+
+    ax[0][2].set_xticks(x + width/2, list(distributionDict.keys()))
+    ax[0][2].legend(bbox_to_anchor=(1.01,0.5))
+    
+    ax[0][0].set_ylim(0, 107)
+    ax[0][1].set_ylim(0, 107)
+    ax[0][2].set_ylim(0, 107)
+
+    ax[1][0].violinplot(ratioPorosity)
+    ax[1][0].set_xticks([y + 1 for y in range(len(ratioPorosity))],
+                  labels=['5%', '12.5%', '25%', '37.5%', '50%'])
+    ax[1][1].violinplot(ratioSize)
+    ax[1][1].set_xticks([y + 1 for y in range(len(ratioSize))],
+                  labels=['Small', 'Medium', 'Large', 'Mixed'])
+    ax[1][2].violinplot(ratioDistribution)
+    ax[1][2].set_xticks([y + 1 for y in range(len(ratioDistribution))],
+                  labels=['Random', 'Clustered'])
+
+    # Add some text for labels, title and custom x-axis tick labels, etc.
+    ax[1][0].set_ylabel('Sampling Cost Savings Ratio')
+    ax[1][0].set_xlabel("Porosity")
+    ax[1][1].set_xlabel("Pore Sizes")
+    ax[1][2].set_xlabel("Pore Distribution")
+    
+    ax[1][0].set_ylim(0.85, 1.1)
+    ax[1][1].set_ylim(0.85, 1.1)
+    ax[1][2].set_ylim(0.85, 1.1)
+
     plt.show()
 
 PlotSimResults()
