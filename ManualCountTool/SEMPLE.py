@@ -12,8 +12,12 @@ import sys
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import os
+import csv
 
 # TODO: Look up table for all combinations of initial guesses for common MOE and alpha values (e.g., 5% and 95%)
+# 735471 different combinations
+# May only need to do unique p_st though, because p_st is used in calc
+
 
 # Class used to aid in displaying the image with grid overlayed onto sampled pixels
 class PixelMap:
@@ -640,6 +644,239 @@ class MyWindow(QMainWindow):
         
         self.stackedWidget.currentWidget().InitializeCounting(self.initialGuesses)
 
+
+def AutoAnalyzeSimImages():
+    dir = "SimData"
+    files = os.listdir(dir)
+    files.sort()
+    numStrata_N = 4
+    MOE = 0.05
+    alpha = 0.95
+    e_moe = 0.01
+
+    def TwoSidedCL_A(n, p, alpha):
+        sum = 0
+        A_U = 0
+        while sum <= alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
+            A_U += 1
+            sum = 0
+            for i in range(A_U):
+                sum += scipy.stats.binom.pmf(i, n, p)
+
+        sum = 1.0
+        A_L = 0
+        while sum > alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
+            A_L += 1
+            sum = 0
+            for i in range(A_L, n+1):
+                sum += scipy.stats.binom.pmf(i, n, p)
+        
+        return A_L-1, A_U-1
+
+    guessValues = np.array([0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95])
+
+
+    with open("SimOutput.csv", 'a', newline='') as csvFile:
+        writer = csv.writer(csvFile)
+        for file in files:
+            originalImage = io.imread(os.path.join(dir,file), as_gray=True)
+            myMap = PixelMap(originalImage)
+
+            N = myMap.numPixels
+            N_h = int(N / numStrata_N**2)
+
+            initialGuesses = []
+
+            for i in range(numStrata_N):
+                topBound = int(i * myMap.rows / numStrata_N)
+                bottomBound = int((i+1) * myMap.rows/numStrata_N)
+                for j in range(numStrata_N):
+                    leftBound = int(j * myMap.cols / numStrata_N)
+                    rightBound = int((j+1) * myMap.cols / numStrata_N)
+
+                    selectedArea = myMap.originalImage[leftBound:rightBound+1, topBound:bottomBound+1]
+
+                    numPorePixels = np.sum(np.where(selectedArea != 255, 1, 0))
+
+                    porosity = numPorePixels / ((rightBound - leftBound) * (bottomBound - topBound))
+
+                    closestGuess = guessValues[np.argmin(np.abs(porosity - guessValues))]
+
+                    initialGuesses.append(closestGuess)
+            
+            initialGuesses = np.array(initialGuesses)
+            
+            initialStrataProportion = np.sum(initialGuesses) * N_h / N
+            
+            if initialStrataProportion > 0.5 and MOE > 1-initialStrataProportion:
+                MOE = ((1-initialStrataProportion)+MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
+                print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
+            elif initialStrataProportion < 0.5 and MOE > initialStrataProportion:
+                MOE = (initialStrataProportion + MOE) / 2
+                print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
+            
+            upperCL = 1.0
+            lowerCL = 0.0
+            withinTolerance = False
+            currentIter = 0
+            maxIters = 1000
+            currentIter = 0
+            n = numStrata_N ** 2
+            exponent = 1
+            d = 2 * 0.75**(exponent-1) + 1
+            while not withinTolerance and currentIter < maxIters:
+                n = int(np.ceil(n))
+                # print(n)
+
+                lowerCL, upperCL = TwoSidedCL_A(n, initialStrataProportion, alpha)
+                lowerCL /= n
+                upperCL /= n
+
+                if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
+                    n *= d
+                else: # Eq. 15 satisfied
+                    pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
+                    if pctDiff > e_moe: # overestimating how many sample points needed
+                        n /= d
+                        exponent += 1
+                        d = 2 * 0.75**(exponent-1) + 1
+                    else:
+                        withinTolerance = True
+                currentIter += 1
+            
+            if currentIter == maxIters:
+                raise(RuntimeError("Max Iterations reached"))
+
+            # ###################################################### #
+            # Allocate the total number of samples across the strata #
+            # ###################################################### #
+
+            def OptimalAllocation(n):
+                W_h = 1 / numStrata_N**2
+                
+                optRatio = (W_h * (np.sum(np.sqrt(initialGuesses * (1-initialGuesses))))**2) / (np.sum(initialGuesses * (1-initialGuesses)))
+                n *= optRatio
+
+                strataVars = np.empty(numStrata_N**2)
+                cnt = 0
+                for i in range(numStrata_N):
+                    topBound = int(i * myMap.rows/numStrata_N)
+                    bottomBound = int((i+1)*myMap.rows/numStrata_N)
+                    for j in range(numStrata_N):
+                        leftBound = int(j*myMap.cols/numStrata_N)
+                        rightBound = int((j+1)*myMap.cols/numStrata_N)
+                        strataVars[cnt] = np.var(myMap.originalImage[topBound:bottomBound,leftBound:rightBound])
+                        cnt += 1
+
+                n_h = np.empty(numStrata_N**2)
+
+                n_h = np.ceil(n * N_h * strataVars / np.sum(N_h * strataVars)).astype(int)
+
+                # Ensure that at least one point sampled per strata
+                n_h = np.maximum(n_h, 1)
+
+                return n_h
+
+            def ProportionalAllocation(n):
+                n_h = np.ones(numStrata_N**2) * (n/numStrata_N**2)
+
+                n_h = np.ceil(n_h).astype(int)
+
+                return n_h
+
+            n_h_opt = OptimalAllocation(n)
+
+            n_h_prop = ProportionalAllocation(n)
+
+            # ########################## #
+            # Get pixel sample locations #
+            # ########################## #
+
+            csvRow = [f"{file.split('.')[0]}"]
+
+            p_h_opt = []
+            cnt = 0
+            for i in range(numStrata_N):
+                topBound = int(i*myMap.rows/numStrata_N)
+                bottomBound = int((i+1)*myMap.rows/numStrata_N)
+                for j in range(numStrata_N):
+                    leftBound = int(j*myMap.cols/numStrata_N)
+                    rightBound = int((j+1)*myMap.cols/numStrata_N)
+
+                    random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_opt[cnt], replace=False)
+                    random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                    random[0,:] += topBound
+                    random[1,:] += leftBound
+            
+                    pixels = list(zip(random[0,:], random[1,:]))
+                    p_h = 0
+                    for pixel in pixels:
+                        if myMap.originalImage[pixel] != 255:
+                            p_h += 1
+                    
+                    p_h_opt.append(p_h / len(pixels))
+
+                    cnt += 1
+            
+            p_st_opt = np.sum(p_h_opt) * N_h / N
+            p_h_opt = np.array(p_h_opt)
+
+            lowerCL, upperCL = TwoSidedCL_A(np.sum(n_h_opt), p_st_opt, alpha)
+            lowerCL /= np.sum(n_h_opt)
+            upperCL /= np.sum(n_h_opt)
+
+            csvRow.append(np.sum(n_h_opt))
+            csvRow.append(f"{p_st_opt*100:.3f}")
+            csvRow.append(f"{lowerCL*100:.3f}")
+            csvRow.append(f"{upperCL*100:.3f}")
+
+            # print()
+            # print(f"Optimal ({np.sum(n_h_opt)} samples):")
+            # print(f"{p_st_opt*100:.3f}, ({lowerCL*100:.3f}, {upperCL*100:.3f})")
+            
+            p_h_prop = []
+            cnt = 0
+            for i in range(numStrata_N):
+                topBound = int(i*myMap.rows/numStrata_N)
+                bottomBound = int((i+1)*myMap.rows/numStrata_N)
+                for j in range(numStrata_N):
+                    leftBound = int(j*myMap.cols/numStrata_N)
+                    rightBound = int((j+1)*myMap.cols/numStrata_N)
+
+                    random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_prop[cnt], replace=False)
+                    random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                    random[0,:] += topBound
+                    random[1,:] += leftBound
+
+                    pixels = list(zip(random[0,:], random[1,:]))
+                    p_h = 0
+                    for pixel in pixels:
+                        if myMap.originalImage[pixel] != 255:
+                            p_h += 1
+                    
+                    p_h_prop.append(p_h / len(pixels))
+
+                    cnt += 1
+            
+            p_st_prop = np.sum(p_h_prop) * N_h / N
+            p_h_prop = np.array(p_h_prop)
+
+            lowerCL, upperCL = TwoSidedCL_A(np.sum(n_h_prop), p_st_prop, alpha)
+            lowerCL /= np.sum(n_h_prop)
+            upperCL /= np.sum(n_h_prop)
+
+            csvRow.append(np.sum(n_h_prop))
+            csvRow.append(f"{p_st_prop*100:.3f}")
+            csvRow.append(f"{lowerCL*100:.3f}")
+            csvRow.append(f"{upperCL*100:.3f}")
+
+            writer.writerow(csvRow)
+            csvFile.flush()
+
+            # print()
+            # print(f"Proportional ({np.sum(n_h_prop)} samples):")
+            # print(f"{p_st_prop*100:.3f}, ({lowerCL*100:.3f}, {upperCL*100:.3f})")
+
 # TODO: Confirmation on last grid before submitting
 def main():
     app = QtWidgets.QApplication(sys.argv)
@@ -658,4 +895,5 @@ def main():
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    main()
+    # main()
+    AutoAnalyzeSimImages()
