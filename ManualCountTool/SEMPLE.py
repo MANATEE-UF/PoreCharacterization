@@ -14,9 +14,7 @@ from matplotlib.figure import Figure
 import os
 import csv
 
-# TODO: Look up table for all combinations of initial guesses for common MOE and alpha values (e.g., 5% and 95%)
-# 735471 different combinations
-# May only need to do unique p_st though, because p_st is used in calc
+# TODO: Confirmation on last grid point before calculation
 
 
 # Class used to aid in displaying the image with grid overlayed onto sampled pixels
@@ -290,12 +288,12 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         currentIter = 0
         n = self.numStrata_N ** 2
         iterExponent = 1
-        d = 2 * 0.75**(iterExponent-1) + 1
+        d = 0.5 * 0.75**(iterExponent-1) + 1
         while not withinTolerance and currentIter < maxIters:
             n = int(np.ceil(n))
             # print(n)
 
-            lowerCL, upperCL = self.TwoSidedCL_A(n, initialStrataProportion, self.alpha)
+            lowerCL, upperCL = scipy.stats.binom.interval(self.alpha, n, initialStrataProportion)
             lowerCL /= n
             upperCL /= n
 
@@ -548,7 +546,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
                 p_h = np.array(p_h)
                 variance = (1 / self.N)**2 * np.sum((self.N_h**2 * (self.N_h-self.n_h) * p_h * (1-p_h)) / ((self.N_h-1) * self.n_h))
 
-                lowerCL, upperCL = self.TwoSidedCL_A(np.sum(self.n_h), p_st, self.alpha)
+                lowerCL, upperCL = scipy.stats.binom.interval(self.alpha, np.sum(self.n_h), p_st)
                 lowerCL /= np.sum(self.n_h)
                 upperCL /= np.sum(self.n_h)
 
@@ -650,28 +648,9 @@ def AutoAnalyzeSimImages():
     files = os.listdir(dir)
     files.sort()
     numStrata_N = 4
-    MOE = 0.05
+    MOE = 0.03
     alpha = 0.95
     e_moe = 0.01
-
-    def TwoSidedCL_A(n, p, alpha):
-        sum = 0
-        A_U = 0
-        while sum <= alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
-            A_U += 1
-            sum = 0
-            for i in range(A_U):
-                sum += scipy.stats.binom.pmf(i, n, p)
-
-        sum = 1.0
-        A_L = 0
-        while sum > alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
-            A_L += 1
-            sum = 0
-            for i in range(A_L, n+1):
-                sum += scipy.stats.binom.pmf(i, n, p)
-        
-        return A_L-1, A_U-1
 
     guessValues = np.array([0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95])
 
@@ -723,12 +702,17 @@ def AutoAnalyzeSimImages():
             currentIter = 0
             n = numStrata_N ** 2
             exponent = 1
-            d = 2 * 0.75**(exponent-1) + 1
+            d = 0.5 * 0.75**(exponent-1) + 1
+            lastGuess = -1
             while not withinTolerance and currentIter < maxIters:
                 n = int(np.ceil(n))
-                # print(n)
+                # print(f"{lastGuess} -> {n}")
+                # print(d)
+                if n == lastGuess:
+                    break
+                lastGuess = n
 
-                lowerCL, upperCL = TwoSidedCL_A(n, initialStrataProportion, alpha)
+                lowerCL, upperCL = scipy.stats.binom.interval(alpha, n, initialStrataProportion)
                 lowerCL /= n
                 upperCL /= n
 
@@ -739,7 +723,7 @@ def AutoAnalyzeSimImages():
                     if pctDiff > e_moe: # overestimating how many sample points needed
                         n /= d
                         exponent += 1
-                        d = 2 * 0.75**(exponent-1) + 1
+                        d = 0.5 * 0.75**(exponent-1) + 1
                     else:
                         withinTolerance = True
                 currentIter += 1
@@ -821,7 +805,7 @@ def AutoAnalyzeSimImages():
             p_st_opt = np.sum(p_h_opt) * N_h / N
             p_h_opt = np.array(p_h_opt)
 
-            lowerCL, upperCL = TwoSidedCL_A(np.sum(n_h_opt), p_st_opt, alpha)
+            lowerCL, upperCL = scipy.stats.binom.interval(alpha, np.sum(n_h_opt), p_st_opt)
             lowerCL /= np.sum(n_h_opt)
             upperCL /= np.sum(n_h_opt)
 
@@ -861,7 +845,8 @@ def AutoAnalyzeSimImages():
             p_st_prop = np.sum(p_h_prop) * N_h / N
             p_h_prop = np.array(p_h_prop)
 
-            lowerCL, upperCL = TwoSidedCL_A(np.sum(n_h_prop), p_st_prop, alpha)
+            scipy.stats.binom.interval(alpha, np.sum(n_h_prop), p_st_prop)
+            lowerCL, upperCL = scipy.stats.binom.interval(alpha, np.sum(n_h_prop), p_st_prop)
             lowerCL /= np.sum(n_h_prop)
             upperCL /= np.sum(n_h_prop)
 
@@ -877,7 +862,6 @@ def AutoAnalyzeSimImages():
             # print(f"Proportional ({np.sum(n_h_prop)} samples):")
             # print(f"{p_st_prop*100:.3f}, ({lowerCL*100:.3f}, {upperCL*100:.3f})")
 
-# TODO: Confirmation on last grid before submitting
 def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
@@ -895,5 +879,5 @@ def main():
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    # main()
-    AutoAnalyzeSimImages()
+    main()
+    # AutoAnalyzeSimImages()
