@@ -30,30 +30,33 @@ class PixelMap:
             self.originalImage = self.originalImage.astype(int)
 
     # Overlay a grid onto the original image and return centered around that grid
-    def GetImageWithGridOverlay(self, pixelRow:int, pixelCol:int, newColor:tuple, numSurroundingPixels:int) -> np.ndarray: 
+    def GetImageWithGridOverlay(self, pixelRow:int, pixelCol:int, newColor:tuple, numSurroundingPixels:int, style:int) -> np.ndarray: 
         # Center
         displayImage = gray2rgb(self.originalImage)
 
-        displayImage[pixelRow][pixelCol] = newColor
+        if style == 0:
+            displayImage[pixelRow][pixelCol] = newColor
 
-        # Three above
+        minValue = 1 if style != 2 else 2
+        
+        # above
         maxVal = 3 if pixelRow > 2 else pixelRow
-        for i in range(1,maxVal):
+        for i in range(minValue, maxVal):
             displayImage[pixelRow-i][pixelCol] = newColor
 
-        # Three below
+        # below
         maxVal = 3 if pixelRow < self.rows-3 else self.rows-pixelRow
-        for i in range(1,maxVal):
+        for i in range(minValue, maxVal):
             displayImage[pixelRow+i][pixelCol] = newColor
 
-        # Three right
+        # right
         maxVal = 3 if pixelCol < self.cols-3 else self.cols-pixelCol
-        for i in range(1,maxVal):
+        for i in range(minValue, maxVal):
             displayImage[pixelRow][pixelCol+i] = newColor
 
-        # Three left
+        # left
         maxVal = 3 if pixelCol > 2 else pixelCol
-        for i in range(1,maxVal):
+        for i in range(minValue, maxVal):
             displayImage[pixelRow][pixelCol-i] = newColor
         
         # pad image to ensure display proper
@@ -194,6 +197,8 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         self.useOptimalAlloc = useOptimalAlloc
 
         self.saveDir = saveDir
+
+        self.displayToggle = 0
 
         self.sc = MplCanvas(self, width=7, height=7, dpi=100)
 
@@ -405,13 +410,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         self.poreData = np.zeros((self.numGrids))
         self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
 
-        displayImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
-
-        self.sc.axes.cla()
-        self.sc.axes.imshow(displayImage, cmap="gray", vmin=0, vmax=255)
-        self.sc.axes.set_yticks([])
-        self.sc.axes.set_xticks([])
-        self.sc.draw()
+        self.UpdateDisplay()
 
         self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
 
@@ -438,13 +437,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         if self.numSurroundingPixels < 300:
             self.numSurroundingPixels += 25
         
-        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
-
-        self.sc.axes.cla()
-        self.sc.axes.imshow(newImage)
-        self.sc.axes.set_yticks([])
-        self.sc.axes.set_xticks([])
-        self.sc.draw()
+        self.UpdateDisplay()
 
         if self.numSurroundingPixels >= 300:
             self.zoomOutButton.setEnabled(False)
@@ -462,13 +455,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         if self.numSurroundingPixels > 25:
             self.numSurroundingPixels -= 25
         
-        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels)
-
-        self.sc.axes.cla()
-        self.sc.axes.imshow(newImage)
-        self.sc.axes.set_yticks([])
-        self.sc.axes.set_xticks([])
-        self.sc.draw()
+        self.UpdateDisplay()
 
         if self.numSurroundingPixels == 25:
             self.zoomInButton.setEnabled(False)
@@ -502,6 +489,8 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
             self.ZoomIn()
         elif event.key() == QtCore.Qt.Key_Minus:
             self.ZoomOut()
+        elif event.key() == QtCore.Qt.Key_H:
+            self.ToggleDisplay()
         else:
             pass
     
@@ -571,15 +560,27 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
             return
 
-        markerColor = (50, 225, 248)
-        newImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], markerColor, self.numSurroundingPixels)
         self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
 
+        self.UpdateDisplay()
+
+    def UpdateDisplay(self):
+        displayImage = self.myMap.GetImageWithGridOverlay(self.samplePositions[self.strataIndex][self.sampleIndex][0], self.samplePositions[self.strataIndex][self.sampleIndex][1], (50, 225, 248), self.numSurroundingPixels, self.displayToggle)
+
         self.sc.axes.cla()
-        self.sc.axes.imshow(newImage, cmap="gray", vmin=0, vmax=255)
+        self.sc.axes.imshow(displayImage)
         self.sc.axes.set_yticks([])
         self.sc.axes.set_xticks([])
         self.sc.draw()
+
+    def ToggleDisplay(self):
+        
+        if self.displayToggle != 2:
+            self.displayToggle += 1
+        else:
+            self.displayToggle = 0
+        
+        self.UpdateDisplay()
 
 
 class MyWindow(QMainWindow):
