@@ -76,7 +76,7 @@ def medium(targetPorosity, image_size_x, image_size_y, boundingbox_x=None, bound
 
 def large(targetPorosity, image_size_x, image_size_y, boundingbox_x=None, boundingbox_y=None):
     min_radius = 51 #units: pixels
-    max_radius = 100 #units: pixels
+    max_radius = 75 #units: pixels
     total_area = []
     drawn_positions = []
     img = draw_image(image_size_x, image_size_y)
@@ -113,7 +113,7 @@ def mixed(targetPorosity, image_size_x, image_size_y, boundingbox_x=None, boundi
             max_radius = 50
         elif size == 3: #large pore
             min_radius = 51
-            max_radius = 100
+            max_radius = 75
         radius_x, radius_y = random_radius(min_radius, max_radius)
         area = ellipse_area(radius_x, radius_y)
         total_area.append(area)
@@ -135,11 +135,11 @@ def porositycalc(img_array, x, y):
     img_porosity = (np.sum(img_array!=255)/img_area) * 100
     return img_porosity
 
-def main(set_porosity, size_dist, orientation):
+def main(set_porosity, size_dist, orientation, imageNumber):
     #set desired number of images, porosity, image size, size distribution, and orientation
-    num_images = 20
-    image_size_x = 1024 #units: pixels
-    image_size_y = 1024 #units: pixels
+    num_images = 10000
+    image_size_x = 512 #units: pixels
+    image_size_y = 512 #units: pixels
     #options for size_dist are: 'small', 'medium', 'large', and 'mixed' (for random number of all sizes)
     #options for orientation are: 'random' or 'clustered' (for pores clustered in one area of the image)
 
@@ -155,11 +155,6 @@ def main(set_porosity, size_dist, orientation):
         writer.writerow(["ID", "Target Porosity", "Real Porosity", "Pore sizes", "Random or Clustered"])
         
         for i in range(num_images):
-
-            randInts = os.listdir(dirName)
-            randInt = random.randint(100000,999999)
-            while randInt in randInts:
-                randInt = random.randint(100000,999999)
 
             if orientation == 'random':
                 boundingbox_x = None
@@ -178,16 +173,21 @@ def main(set_porosity, size_dist, orientation):
             elif size_dist == 'mixed':
                 random_image, real_porosity = mixed(set_porosity, image_size_x, image_size_y, boundingbox_x, boundingbox_y)
             
-            random_image.save(f"{dirName}/{randInt}.png")
-            key_entry = [f"{randInt}",f"{set_porosity}" ,f"{real_porosity:.3f}", size_dist, orientation]
+            random_image.save(f"{dirName}/{imageNumber}.png")
+            key_entry = [f"{imageNumber}",f"{set_porosity}" ,f"{real_porosity:.3f}", size_dist, orientation]
             writer.writerow(key_entry)
+
+            imageNumber += 1
     
 
+
 if __name__ == "__main__":
+    imageNumber = 100000
     porosityVals = [5, 12.5, 25, 37.5, 50]
     poreSizes = ["small", "medium", "large", "mixed"]
     distributions = ["random", "clustered"]
     for i in range(len(porosityVals)):
         for j in range(len(poreSizes)):
             for k in range(len(distributions)):
-                main(porosityVals[i], poreSizes[j], distributions[k])
+                main(porosityVals[i], poreSizes[j], distributions[k], imageNumber)
+                imageNumber += 10000
