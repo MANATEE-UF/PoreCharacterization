@@ -16,6 +16,7 @@ from skimage.transform import resize
 from tqdm import tqdm
 import meshlib.mrmeshpy as mr
 import meshlib.mrmeshnumpy as mrnumpy
+import seaborn as sns
 
 #Reads in grayscale images from a given directory of images. Does not read any files that do not have the specified file extension
 #Assumes image filenames are in the format: filename_#.fileExtension where # is the number of the image with leading 0s
@@ -511,7 +512,16 @@ def ThresholdCleaningMask(smooth, voids, imageStack = True):
         voids = binary_fill_holes(voids)
 
     return voids
-    
+
+#Adds a 1 pixel thick padding around the edge faces of the voids 3D image stack, that way mesh generation algorithms know the pore ends at the edges of the 3D image stack
+def PadVoids(voids):
+    voids = np.pad(voids, pad_width=((0,0), (1,1), (1,1)), mode='constant', constant_values=False)
+    edgeSlice = np.full_like(voids[:1, :, :], False)
+    voids = np.concatenate([edgeSlice, voids], axis=0)
+    voids = np.concatenate([voids, edgeSlice], axis=0)
+
+    return voids
+
 def LoopDecimation(obj, reductionFactor, initFaces):
     numRemainingFaces = initFaces
     prevNumRemainingFaces = initFaces
@@ -532,19 +542,9 @@ def LoopDecimation(obj, reductionFactor, initFaces):
 
     return obj, facesDeleted, vertsDeleted    
 
-def PadVoids(voids):
-    voids = np.pad(voids, pad_width=((0,0), (1,1), (1,1)), mode='constant', constant_values=False)
-    edgeSlice = np.full_like(voids[:1, :, :], False)
-    voids = np.concatenate([edgeSlice, voids], axis=0)
-    voids = np.concatenate([voids, edgeSlice], axis=0)
-
-    return voids
-
 #Generates a mesh of the pore structure using the method of marching cubes from scikit image and numpy-stl
-def CreateMeshReconstruction(voids, reductionFactor=None, printResults=False):
-    voids = PadVoids(voids)
-
-    verts, faces, normals, values = measure.marching_cubes(voids)
+def DeprecatedCreateMeshReconstruction(paddedVoids, reductionFactor=None, printResults=False):
+    verts, faces, normals, values = measure.marching_cubes(paddedVoids)
 
     obj = mrnumpy.meshFromFacesVerts(faces, verts)
 
@@ -557,7 +557,8 @@ def CreateMeshReconstruction(voids, reductionFactor=None, printResults=False):
 
     return obj
 
-def AltDecimation(obj, reductionFactor, initFaces):
+#Decimates generated mesh to smooth it out and reduce vertices/faces to be more space efficient
+def Decimation(obj, reductionFactor, initFaces):
     target = round((1 - reductionFactor) * initFaces)
 
     settings = mr.DecimateSettings()
@@ -569,15 +570,17 @@ def AltDecimation(obj, reductionFactor, initFaces):
 
     return obj, facesDeleted, vertsDeleted
 
-def AltCreateMeshReconstruction(voids, reductionFactor=None, printResults=False):
-    voids = PadVoids(voids)
+#Generates a mesh of the pore structure using the method of marching cubes from scikit image and numpy-stl
+def CreateMeshReconstruction(paddedVoids, reductionFactor=None, printResults=False):
+    #Must use reverse order for voids so that orientation of mesh matches orientation of fuel as it was milled away
+    reversedVoids = paddedVoids[::-1, :, :]
 
-    verts, faces, normals, values = measure.marching_cubes(voids)
+    verts, faces, normals, values = measure.marching_cubes(reversedVoids)
 
     obj = mrnumpy.meshFromFacesVerts(faces, verts)
 
     if reductionFactor != None:
-        obj, facesDeleted, vertsDeleted = AltDecimation(obj, reductionFactor, len(faces))
+        obj, facesDeleted, vertsDeleted = Decimation(obj, reductionFactor, len(faces))
 
         if printResults:
             print(f"{facesDeleted} faces deleted.")
@@ -627,8 +630,8 @@ def CalculatePoreFeatures(binaryImages, resolution, convertUnits=True):
     
     #Use 6-connectivity
     structure = np.array([[[0, 0, 0], [0, 1, 0], [0, 0, 0]],
-                         [[0, 1, 0], [1, 1, 1], [0, 1, 0]],
-                         [[0, 0, 0], [0, 1, 0], [0, 0, 0]]])
+                          [[0, 1, 0], [1, 1, 1], [0, 1, 0]],
+                          [[0, 0, 0], [0, 1, 0], [0, 0, 0]]])
     
     #Use specified connectivity to label pores within image
     labeledMask, numPores = label(binaryImages, structure=structure)
@@ -653,9 +656,31 @@ def CalculatePoreFeatures(binaryImages, resolution, convertUnits=True):
         poreVolumes *= scale
         
         #Convert calculated pore radii to microns
-        poreVolumes *= resolution * 0.001
+        poreRadii *= resolution * 0.001
 
     return numPores, poreVolumes, poreRadii, poreCentroids
+
+def PrintPoreStatistics(numPores, poreRadii):
+    print("Number of Pores: ", numPores)
+    cdf = np.linspace(0, 1, len(poreRadii))
+    
+    #CDF Plot of Pore Radii
+    plt.figure(figsize=(10, 6))
+    plt.plot(np.sort(poreRadii), cdf, marker='.', linestyle='none', color='purple')
+    plt.xlabel('Pore Radius (Cubic Microns)')
+    plt.xscale('log')
+    plt.ylabel('Cumulative Probability')
+    plt.title('CDF of Pore Radii')
+    plt.show()
+
+    #KDE Plot of Pore Radii
+    plt.figure(figsize=(10, 6))
+    sns.kdeplot(poreRadii, shade=True, color='coral')
+    plt.xlabel('Pore Radius (Cubic Microns)')
+    plt.ylabel('Density')
+    plt.xscale('log')
+    plt.title('KDE Plot of Pore Radii')
+    plt.show()
 
 def main():
     ########## IO Directories And Image Data ##########
@@ -715,18 +740,18 @@ def main():
 
     # #Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
     # # SaveImages(voids, 'BinaryStack', outDir)
-    # SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
+    # # SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
 
-    # paddedVoids = PadVoids(voids)
-
+    # paddedVoids = PadVoids(voids)\
+    
     # #Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
     # # SaveImages(paddedVoids, 'BinaryStackPadded', outDir)
     # # SaveImages(paddedVoids.astype(np.uint8)*255, 'BinaryStackPadded', outDir)
     
-    # # reconstruction = CreateMeshReconstruction(paddedVoids, 0.01, True)
-    # altReconstruction = AltCreateMeshReconstruction(paddedVoids, 0.01, True)
 
-    # SaveMeshAsSTL(altReconstruction, '91T_MidRadial_99%_Reduced', 'PoreReconstruction', outDir)
+    # reconstruction = CreateMeshReconstruction(paddedVoids, 0.01, True)
+
+    # SaveMeshAsSTL(reconstruction, '91T_MidRadial_99%_Reduced', 'PoreReconstruction', outDir)
 
 
 
@@ -736,11 +761,9 @@ def main():
     
     numPores, poreVolumes, poreRadii, poreCentroids= CalculatePoreFeatures(binaryImages, resolution, convertUnits=True)
 
-    print(f"Number of Pores: {numPores}")
-    
-    print(poreVolumes)
-    print(poreRadii)
-    print(poreCentroids)
+    # PrintPoreStatistics(numPores, poreRadii)
+
+    print(np.sort(poreVolumes)[0:10])
 
 if __name__ == "__main__":
     main()
