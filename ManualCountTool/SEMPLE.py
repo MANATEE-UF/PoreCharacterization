@@ -219,9 +219,7 @@ class InitialGuessWidget(QtWidgets.QWidget):
         self.strataIndex += 1
 
         if self.strataIndex == self.numStrata_N**2:
-            print("Strata estimates:")
-            print(self.initialGuesses)
-            self.parentTab.MoveToNextWidget(np.array(self.initialGuesses))
+            self.parentTab.MoveToConstituentCountWidget()
             return
 
         self.sc.axes.cla()
@@ -235,17 +233,14 @@ class InitialGuessWidget(QtWidgets.QWidget):
         self.sc.draw()
 
 
-class PoreAnalysisWidget(QtWidgets.QWidget):
+class ConstituentCountingWidget(QtWidgets.QWidget):
 
-    def __init__(self, parentTab, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe, widgetIndex, useOptimalAlloc=True):
-        super(PoreAnalysisWidget, self).__init__()
+    def __init__(self, parentTab):
+        super(ConstituentCountingWidget, self).__init__()
 
         self.parentTab = parentTab
-        self.widgetIndex = widgetIndex
 
-        self.useOptimalAlloc = useOptimalAlloc
-
-        self.saveDir = saveDir
+        self.allocationStrategy = None
 
         self.displayToggle = 0
 
@@ -304,22 +299,21 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         vbox.addLayout(hbox)
 
         self.setLayout(vbox)
+        
+        self.numSurroundingPixels = 50
 
+        self.e_moe = 0.01
+        self.d = 0.9
+
+    def InitializeCounting(self, initialGuesses, imagePath, allocationStrategy, countAreaBounds, countAreaType, confidence, MOE):
+
+        self.numStrata_N = int(np.sqrt(len(initialGuesses)))
         self.imageName = imagePath
         image = io.imread(imagePath, as_gray=True)
         self.myMap = PixelMap(image)
         self.N = self.myMap.numPixels
-        
-        self.numSurroundingPixels = 50
-
-        self.alpha = alpha
-        self.MOE = MOE
-        self.e_moe = e_moe
-        self.d = 0.9
-        self.numStrata_N = numStrata_N
         self.N_h = int(self.N / self.numStrata_N**2)
-
-    def InitializeCounting(self, initialGuesses):
+        self.confidence = confidence
 
         # ############################################################################ #
         # Calculate the total number of samples needed to acheieve specified precision #
@@ -327,11 +321,11 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
         initialStrataProportion = np.sum(initialGuesses) * self.N_h / self.N
         
-        if initialStrataProportion > 0.5 and self.MOE > 1-initialStrataProportion:
-            self.MOE = ((1-initialStrataProportion)+self.MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
+        if initialStrataProportion > 0.5 and MOE > 1-initialStrataProportion:
+            MOE = ((1-initialStrataProportion)+MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
             print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
-        elif initialStrataProportion < 0.5 and self.MOE > initialStrataProportion:
-            self.MOE = (initialStrataProportion + self.MOE) / 2
+        elif initialStrataProportion < 0.5 and MOE > initialStrataProportion:
+            MOE = (initialStrataProportion + MOE) / 2
             print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
         
         upperCL = 1.0
@@ -345,16 +339,15 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         d = 0.5 * 0.75**(iterExponent-1) + 1
         while not withinTolerance and currentIter < maxIters:
             n = int(np.ceil(n))
-            # print(n)
 
-            lowerCL, upperCL = scipy.stats.binom.interval(self.alpha, n, initialStrataProportion)
+            lowerCL, upperCL = scipy.stats.binom.interval(confidence, n, initialStrataProportion)
             lowerCL /= n
             upperCL /= n
 
-            if ((upperCL - lowerCL) / 2) > self.MOE: # Eq.15 not satisfied
+            if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
                 n *= d
             else: # Eq. 15 satisfied
-                pctDiff = abs((((upperCL - lowerCL) / 2) - self.MOE) / self.MOE)
+                pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
                 if pctDiff > self.e_moe: # overestimating how many sample points needed
                     n /= d
                     iterExponent += 1
@@ -403,18 +396,10 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
             return n_h
 
-        if self.useOptimalAlloc:
+        if allocationStrategy == "Optimal":
             n_h = OptimalAllocation(n)
-            print("Optimal Allocation:")
-            print()
         else:
             n_h = ProportionalAllocation(n)
-            print("Proportional Allocation:")
-            print()
-                
-        print(f"{np.sum(n_h)} samples needed to achieve {self.MOE} MOE with {100*(self.alpha)}% CI")
-
-        print(n_h)
 
         self.n_h = n_h
 
@@ -422,6 +407,8 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         # Get pixel sample locations #
         # ########################## #
 
+
+        # TODO: Use count area type and bounds to determine the sampled region
         pixels = []
         cnt = 0
         for i in range(self.numStrata_N):
@@ -430,11 +417,6 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
             for j in range(self.numStrata_N):
                 leftBound = int(j*self.myMap.cols/self.numStrata_N)
                 rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
-
-                # TODO: Is below still a bug?
-                # FIXME: Because separating out x and y selection, sometimes n_h is greater than num pixels in x or y direction, thus ValueError
-                # randomY = np.random.choice(np.arange(topBound, bottomBound), n_h[cnt], replace=False) 
-                # randomX = np.random.choice(np.arange(leftBound, rightBound), n_h[cnt], replace=False)
 
                 random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h[cnt], replace=False)
                 random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
@@ -463,10 +445,10 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
         self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
 
-    def TwoSidedCL_A(self, n, p, alpha):
+    def TwoSidedCL_A(self, n, p, confidence):
         sum = 0
         A_U = 0
-        while sum <= alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
+        while sum <= confidence + (1-confidence)/2: # The addition term is used because confidence includes AUC of upper and lower bound.
             A_U += 1
             sum = 0
             for i in range(A_U):
@@ -474,7 +456,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
         sum = 1.0
         A_L = 0
-        while sum > alpha + (1-alpha)/2: # The addition term is used because alpha includes AUC of upper and lower bound.
+        while sum > confidence + (1-confidence)/2: # The addition term is used because confidence includes AUC of upper and lower bound.
             A_L += 1
             sum = 0
             for i in range(A_L, n+1):
@@ -519,7 +501,7 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
         self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
         
     def keyPressEvent(self, event):
-        if self.parentTab.stackedWidget.currentIndex() != self.widgetIndex:
+        if self.parentTab.stackedWidget.currentIndex() != 2:
             return
         
         if event.key() == QtCore.Qt.Key_Left:
@@ -567,45 +549,24 @@ class PoreAnalysisWidget(QtWidgets.QWidget):
 
         if self.gridIndex >= self.numGrids:
             p_h = []
-            if self.saveDir is None:
-                saveFileName = f"{os.path.splitext(os.path.basename(self.imageName))[0]}_countData.csv"
-            else:
-                saveFileName = f"{self.saveDir}/{os.path.splitext(os.path.basename(self.imageName))[0]}_countData.csv"
-            with open(saveFileName, "a") as f:
-                for i, n in enumerate(self.n_h):
-                    if i == 0:
-                        bounds = [0, n]
-                    else:
-                        bounds = [np.cumsum(self.n_h[:i])[-1], np.cumsum(self.n_h[:i])[-1] + n]
-                    p_h.append(np.average(self.poreData[bounds[0]:bounds[1]]))
 
-                p_st = np.sum(p_h) * self.N_h / self.N
+            for i, n in enumerate(self.n_h):
+                if i == 0:
+                    bounds = [0, n]
+                else:
+                    bounds = [np.cumsum(self.n_h[:i])[-1], np.cumsum(self.n_h[:i])[-1] + n]
+                p_h.append(np.average(self.poreData[bounds[0]:bounds[1]]))
 
-                p_h = np.array(p_h)
-                variance = (1 / self.N)**2 * np.sum((self.N_h**2 * (self.N_h-self.n_h) * p_h * (1-p_h)) / ((self.N_h-1) * self.n_h))
+            p_st = np.sum(p_h) * self.N_h / self.N
 
-                lowerCL, upperCL = scipy.stats.binom.interval(self.alpha, np.sum(self.n_h), p_st)
-                lowerCL /= np.sum(self.n_h)
-                upperCL /= np.sum(self.n_h)
+            p_h = np.array(p_h)
 
-                np.savetxt(f, 
-                    p_h, 
-                    fmt="%.2f", 
-                    delimiter=",", 
-                    header=f"{os.path.splitext(os.path.basename(self.imageName))[0]} with {self.numGrids} samples across {self.numStrata_N**2} strata. \n alpha = {self.alpha} \n MOE = {self.MOE} \n e_moe = {self.e_moe} \n d = {self.d}",
-                    footer=f"\n Porosity: {p_st * 100}% \n {self.alpha}% CI: ({100*lowerCL, 100*upperCL}) \n MOE: {(upperCL - lowerCL) / 2}")
+            lowerCL, upperCL = scipy.stats.binom.interval(self.confidence, np.sum(self.n_h), p_st)
+            lowerCL /= np.sum(self.n_h)
+            upperCL /= np.sum(self.n_h)
+
             
-            print(f"\n Porosity: {p_st * 100:.3f}% \n {100*(self.alpha)}% CI: ({100*lowerCL:.3f}, {100*upperCL:.3f}) \n MOE: {(upperCL - lowerCL) / 2:.3f} \n Variance: {variance:.10f}")
-            print()
-
-            if self.useOptimalAlloc:
-                self.parentTab.optAlloc_p_st = p_h
-                self.parentTab.optAlloc_all = self.poreData
-            else:
-                self.parentTab.propAlloc_p_st = p_h
-                self.parentTab.propAlloc_all = self.poreData
-            
-            self.parentTab.MoveToNextWidget()
+            self.parentTab.MoveToSetupWidget(p_st, lowerCL, upperCL)
 
             return
 
@@ -637,12 +598,11 @@ class SetupWidget(QtWidgets.QWidget):
         super(SetupWidget, self).__init__()
 
         self.parentTab = parentTab
-        self.previousResultsRows = []
-        self.countAreaBounds = []
+        self.countAreaBounds = None
 
         # Step 1 widgets and layout
         self.step1Number = QtWidgets.QLabel("1")
-        self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px;")
+        self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
         self.selectImageText = QtWidgets.QLabel("Select Image:")
         self.imagePathBox = QtWidgets.QLineEdit("")
         self.browseImagePath = QtWidgets.QPushButton("Browse")
@@ -658,7 +618,7 @@ class SetupWidget(QtWidgets.QWidget):
 
         # Step 2 widgets and layout
         self.step2Number = QtWidgets.QLabel("2")
-        self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 20px;")
+        self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
         self.selectCountAreaText = QtWidgets.QLabel("Select Count Area")
         self.selectFullImageButton = QtWidgets.QPushButton("Full Image")
         self.selectFullImageButton.setCheckable(True)
@@ -687,7 +647,7 @@ class SetupWidget(QtWidgets.QWidget):
 
         # Step 3 widgets and layout
         self.step3Number = QtWidgets.QLabel("3")
-        self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px;")
+        self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
         self.selectAllocationText = QtWidgets.QLabel("Select Allocation Method:")
         self.selectProportionalButton = QtWidgets.QPushButton("Proportional")
         self.selectProportionalButton.setCheckable(True)
@@ -705,7 +665,7 @@ class SetupWidget(QtWidgets.QWidget):
 
         # Step 4 widgets and layout
         self.step4Number = QtWidgets.QLabel("4")
-        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px;")
+        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
         self.setCItext = QtWidgets.QLabel("Set CI:")
         self.setCIbox = QtWidgets.QLineEdit("")
         self.setMOEtext = QtWidgets.QLabel("Set MOE:")
@@ -726,27 +686,43 @@ class SetupWidget(QtWidgets.QWidget):
 
         # Export results button
         self.exportPreviousResultsButton = QtWidgets.QPushButton("Export previous results to csv")
-        self.exportPreviousResultsButton.setDisabled(True)
         
         # Previous results table
         self.previousResultsTable = QtWidgets.QTableWidget()
         self.previousResultsTable.setRowCount(1)
-        self.previousResultsTable.setColumnCount(6)
+        self.previousResultsTable.setColumnCount(5)
         self.previousResultsTable.setItem(0,0, QtWidgets.QTableWidgetItem("Image Name"))
         self.previousResultsTable.setItem(0,1, QtWidgets.QTableWidgetItem("Allocation"))
-        self.previousResultsTable.setItem(0,2, QtWidgets.QTableWidgetItem("Samples"))
-        self.previousResultsTable.setItem(0,3, QtWidgets.QTableWidgetItem("Area Fraction"))
-        self.previousResultsTable.setItem(0,4, QtWidgets.QTableWidgetItem("Confidence Interval"))
-        self.previousResultsTable.setItem(0,5, QtWidgets.QTableWidgetItem("Margin of Error"))
+        self.previousResultsTable.setItem(0,2, QtWidgets.QTableWidgetItem("Area Fraction"))
+        self.previousResultsTable.setItem(0,3, QtWidgets.QTableWidgetItem("Confidence Interval"))
+        self.previousResultsTable.setItem(0,4, QtWidgets.QTableWidgetItem("Margin of Error"))
+        self.previousResultsTable.setStyleSheet("border: 1px solid black; gridline-color: gray")
         self.previousResultsTable.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.previousResultsTable.verticalHeader().setVisible(False)
+        self.previousResultsTable.horizontalHeader().setVisible(False)
+        font = QtGui.QFont("Arial", 12)
+        font.setBold(True)
+        for i in range(5):
+            self.previousResultsTable.item(0, i).setBackground(QtGui.QColor(196,217,244))
+            self.previousResultsTable.item(0, i).setFont(font)
+            self.previousResultsTable.item(0, i).setTextAlignment(QtCore.Qt.AlignCenter)
+
+        # Empty space separator
+        empty = QtWidgets.QFrame()
 
         # Full widget layout
         fullWidgetLayout = QtWidgets.QVBoxLayout()
-        fullWidgetLayout.addWidget(self.step1Widget)
-        fullWidgetLayout.addWidget(self.step2Widget)
-        fullWidgetLayout.addWidget(self.step3Widget)
-        fullWidgetLayout.addWidget(self.step4Widget)
-        fullWidgetLayout.addWidget(self.beginMeasurementButton)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step1Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step2Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step3Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step4Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.beginMeasurementButton, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
         fullWidgetLayout.addWidget(self.previousResultsTable)
         fullWidgetLayout.addWidget(self.exportPreviousResultsButton)
 
@@ -764,16 +740,17 @@ class SetupWidget(QtWidgets.QWidget):
         self.beginMeasurementButton.clicked.connect(self.BeginMeasurement)
         self.setMOEbox.textChanged.connect(self.CheckMOEandCI)
         self.setCIbox.textChanged.connect(self.CheckMOEandCI)
+        self.exportPreviousResultsButton.clicked.connect(self.WriteResultsToCsv)
     
     def SelectOptimal(self):
         self.selectProportionalButton.setChecked(False)
         self.selectOptimalButton.setChecked(True)
-        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
         
     def SelectProportional(self):
         self.selectProportionalButton.setChecked(True)
         self.selectOptimalButton.setChecked(False)
-        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
 
     def SelectFullImage(self):
         self.selectFullImageButton.setChecked(True)
@@ -781,7 +758,8 @@ class SetupWidget(QtWidgets.QWidget):
         self.selectCircCropButton.setChecked(False)
         self.selectAnnularCropButton.setChecked(False)
 
-        self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+        self.countAreaBounds = None
+        self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
 
     def RectangularCrop(self):
         self.selectFullImageButton.setChecked(False)
@@ -796,10 +774,10 @@ class SetupWidget(QtWidgets.QWidget):
         cv2.destroyWindow('Select a ROI and then press ENTER button')
 
         if self.countAreaBounds[2] == 0 and self.countAreaBounds[3] == 0:
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color")
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color; font: bold 24px")
             self.selectRectCropButton.setChecked(False)
         else:
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
 
     def CircularCrop(self):
         self.selectFullImageButton.setChecked(False)
@@ -809,7 +787,6 @@ class SetupWidget(QtWidgets.QWidget):
 
         coords = [None, None, None]
         img = cv2.imread(self.imagePathBox.text())
-        imgCopy = cv2.imread(self.imagePathBox.text())
 
         # mouse callback function
         def draw_circle(event,x,y,flags,param):      
@@ -819,8 +796,24 @@ class SetupWidget(QtWidgets.QWidget):
                     param[1] = y
                     cv2.circle(img,(x,y), 5, (0,0,255), -1)
                 elif param[2] is None:
-                    param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
+                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    else:
+                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
         
         cv2.namedWindow('image')
         cv2.setMouseCallback('image',draw_circle, param=coords)
@@ -833,12 +826,12 @@ class SetupWidget(QtWidgets.QWidget):
         cv2.destroyAllWindows()
 
         if coords[0] is not None and coords[2] is not None:
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+            self.countAreaBounds = coords
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
         else:
-            self.step2Number.setStyleSheet("border: 3px solid black")
+            self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
             self.selectCircCropButton.setChecked(False)
 
-    # TODO: Write annular crop function
     def AnnularCrop(self):
         self.selectFullImageButton.setChecked(False)
         self.selectRectCropButton.setChecked(False)
@@ -847,7 +840,6 @@ class SetupWidget(QtWidgets.QWidget):
 
         coords = [None, None, None, None]
         img = cv2.imread(self.imagePathBox.text())
-        imgCopy = cv2.imread(self.imagePathBox.text())
 
         # mouse callback function
         def draw_circle(event,x,y,flags,param):      
@@ -857,11 +849,43 @@ class SetupWidget(QtWidgets.QWidget):
                     param[1] = y
                     cv2.circle(img,(x,y), 5, (0,0,255), -1)
                 elif param[2] is None:
-                    param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
+                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    else:
+                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
                 elif param[3] is None:
-                    param[3] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    cv2.circle(img, (param[0], param[1]), param[3], (0, 0, 255), 2)
+                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    else:
+                        param[3] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                        cv2.circle(img, (param[0], param[1]), param[3], (0, 0, 255), 2)
         
         cv2.namedWindow('image')
         cv2.setMouseCallback('image',draw_circle, param=coords)
@@ -874,9 +898,10 @@ class SetupWidget(QtWidgets.QWidget):
         cv2.destroyAllWindows()
 
         if coords[0] is not None and coords[2] is not None and coords[3] is not None:
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+            self.countAreaBounds = coords
         else:
-            self.step2Number.setStyleSheet("border: 3px solid black")
+            self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
             self.selectAnnularCropButton.setChecked(False)
 
     def BrowseForImage(self):
@@ -903,13 +928,13 @@ class SetupWidget(QtWidgets.QWidget):
     def CheckImagePath(self):
         try:
             io.imread(self.imagePathBox.text(), as_gray=True)
-            self.step1Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+            self.step1Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
             self.selectFullImageButton.setEnabled(True)
             self.selectRectCropButton.setEnabled(True)
             self.selectCircCropButton.setEnabled(True)
             self.selectAnnularCropButton.setEnabled(True)
         except:
-            self.step1Number.setStyleSheet("border: 3px solid black; background-color: yellow")
+            self.step1Number.setStyleSheet("border: 3px solid black; background-color: yellow; font: bold 24px")
             self.selectFullImageButton.setChecked(False)
             self.selectRectCropButton.setChecked(False)
             self.selectCircCropButton.setChecked(False)
@@ -920,7 +945,7 @@ class SetupWidget(QtWidgets.QWidget):
             self.selectCircCropButton.setDisabled(True)
             self.selectAnnularCropButton.setDisabled(True)
         
-        self.step2Number.setStyleSheet("border: 3px solid black")
+        self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
 
     def CheckMOEandCI(self):
         try:
@@ -932,36 +957,115 @@ class SetupWidget(QtWidgets.QWidget):
             ci = ci.split("%")[0]
             ci = float(ci)
 
-            self.step4Number.setStyleSheet("border: 3px solid black; background-color: lightgreen")
+            self.step4Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
         except:
-            self.step4Number.setStyleSheet("border: 3px solid black")
+            self.step4Number.setStyleSheet("border: 3px solid black; font: bold 24px")
+
+    def GetAllocationStrategy(self):
+        if self.selectOptimalButton.isChecked():
+            return "Optimal"
+        elif self.selectProportionalButton.isChecked():
+            return "Proportional"
+        else:
+            return None
+
+    def GetConfidence(self):
+        ci = self.setCIbox.text()
+        ci = ci.split("%")[0]
+        ci = float(ci)
+
+        # put confidence into 0,1 interval
+        if ci > 1:
+            ci /= 100
+
+        return ci
+
+    def GetMOE(self):
+        moe = self.setMOEbox.text()
+        moe = moe.split("%")[0]
+        moe = float(moe)
+
+        if moe > 1:
+            moe /= 100
+
+        return moe
+
+    def AddResultsToTable(self, p_st, lowerCL, upperCL):
+        rowPosition = self.previousResultsTable.rowCount()
+        self.previousResultsTable.insertRow(rowPosition)
+        
+        self.previousResultsTable.setItem(rowPosition,0, QtWidgets.QTableWidgetItem(f"{os.path.basename(self.imagePathBox.text())}"))
+        self.previousResultsTable.setItem(rowPosition,1, QtWidgets.QTableWidgetItem(self.GetAllocationStrategy()))
+        self.previousResultsTable.setItem(rowPosition,2, QtWidgets.QTableWidgetItem(f"{100*p_st:.2f}%"))
+        self.previousResultsTable.setItem(rowPosition,3, QtWidgets.QTableWidgetItem(f"{int(self.GetConfidence()*100)}% CI: ({100*lowerCL:.1f}%, {100*upperCL:.1f}%)"))
+        self.previousResultsTable.setItem(rowPosition,4, QtWidgets.QTableWidgetItem(f"{100*(upperCL-lowerCL)/2:.2f}%"))
 
     def Clear(self):
-        pass
+        # Reset step 1 text
+        self.imagePathBox.setText("")
+
+        # Reset number highlights
+        self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        
+
+        # Reset step 2 buttons
+        self.selectFullImageButton.setChecked(False)
+        self.selectRectCropButton.setChecked(False)
+        self.selectCircCropButton.setChecked(False)
+        self.selectAnnularCropButton.setChecked(False)
+
+        self.selectFullImageButton.setDisabled(True)
+        self.selectRectCropButton.setDisabled(True)
+        self.selectCircCropButton.setDisabled(True)
+        self.selectAnnularCropButton.setDisabled(True)
+
+        self.countAreaBounds = None
+
+        # Reset step 3 buttons
+        self.selectOptimalButton.setChecked(False)
+        self.selectProportionalButton.setChecked(False)
+
+        # Reset step 4 text
+        self.setMOEbox.setText("")
+        self.setCIbox.setText("")
+
+    def WriteResultsToCsv(self):
+        if self.previousResultsTable.rowCount() == 1:
+            return
+        else:
+            if os.path.exists("AreaFractionResults.csv"):
+                startRow = 1
+            else:
+                startRow = 0
+            with open("AreaFractionResults.csv", "a", newline="") as file:
+                writer = csv.writer(file)
+                for i in range(startRow, self.previousResultsTable.rowCount()):
+                    rowToWrite = []
+                    for j in range(5):
+                        rowToWrite.append(self.previousResultsTable.item(i, j).text())
+                    
+                    writer.writerow(rowToWrite)
 
 
 class MyWindow(QMainWindow):
 
-    def __init__(self, imagePath, numStrata_N, alpha, MOE, e_moe, saveDir=None, useBothAllocations = False):
+    def __init__(self):
         super(MyWindow,self).__init__()
 
-        self.saveDir = saveDir
-        self.useBothAllocations = useBothAllocations
-        self.initialGuesses = None
-
-        self.optAlloc_p_st = []
-        self.optAlloc_all = []
-        self.propAlloc_p_st = []
-        self.propAlloc_all = []
-
-        self.setWindowTitle("QuickAF")
+        self.setWindowTitle("ProgramNameToBeDecided")
+        self.setFixedSize(900,600)
+        font = QtGui.QFont("Arial", 12)
+        self.setFont(font)
 
         self.stackedWidget = QtWidgets.QStackedWidget()
         self.setCentralWidget(self.stackedWidget)
 
         self.setupWidget = SetupWidget(self)
         self.initalGuessWidget = InitialGuessWidget(self)
-        self.constituentCountingWidget = PoreAnalysisWidget(self, saveDir, imagePath, numStrata_N, alpha, MOE, e_moe, widgetIndex=1)
+        self.constituentCountingWidget = ConstituentCountingWidget(self)
 
         self.stackedWidget.addWidget(self.setupWidget)
         self.stackedWidget.addWidget(self.initalGuessWidget)
@@ -973,7 +1077,9 @@ class MyWindow(QMainWindow):
 
         self.stackedWidget.setFocus(QtCore.Qt.NoFocusReason)
 
-    def MoveToSetupWidget(self):
+    def MoveToSetupWidget(self, p_st=None, lowerCL=None, upperCL=None):
+        if p_st is not None:
+            self.setupWidget.AddResultsToTable(p_st, lowerCL, upperCL)
         self.setupWidget.Clear()
         self.stackedWidget.setCurrentIndex(0)
 
@@ -983,18 +1089,17 @@ class MyWindow(QMainWindow):
         
         if self.setupWidget.selectFullImageButton.isChecked():
             countAreaType = "Full"
-            countAreaBounds = None
         elif self.setupWidget.selectRectCropButton.isChecked():
             countAreaType = "Rectangular"
-            countAreaBounds = self.setupWidget.countAreaBounds
         elif self.setupWidget.selectCircCropButton.isChecked():
             countAreaType = "Circular"
-            countAreaBounds = self.setupWidget.countAreaBounds
         elif self.setupWidget.selectAnnularCropButton.isChecked():
             countAreaType = "Annular"
-            countAreaBounds = self.setupWidget.countAreaBounds
         
-        numStrata_N = 5 if countAreaType == "Full" else 20
+        # value will be none, array of length 3 (circ crop), or array of length 4 (rect or annular crop)
+        countAreaBounds = self.setupWidget.countAreaBounds
+
+        numStrata_N = 2 if countAreaType == "Full" else 20
         
         # Initialize the initial guess widget
         self.initalGuessWidget.ReadImage(imagePath, numStrata_N, countAreaType, countAreaBounds)
@@ -1003,32 +1108,30 @@ class MyWindow(QMainWindow):
         self.stackedWidget.setCurrentIndex(1)
 
     def MoveToConstituentCountWidget(self):
-        pass
+        # Get required values
+        if self.setupWidget.selectFullImageButton.isChecked():
+            countAreaType = "Full"
+        elif self.setupWidget.selectRectCropButton.isChecked():
+            countAreaType = "Rectangular"
+        elif self.setupWidget.selectCircCropButton.isChecked():
+            countAreaType = "Circular"
+        elif self.setupWidget.selectAnnularCropButton.isChecked():
+            countAreaType = "Annular"
 
-    def MoveToNextWidget(self, initialGuesses=None):
-        if initialGuesses is not None:
-            self.initialGuesses = initialGuesses
+        # value will be none, array of length 3 (circ crop), or array of length 4 (rect or annular crop)
+        countAreaBounds = self.setupWidget.countAreaBounds
 
-        # Update widget index
-        if self.stackedWidget.currentIndex()+1 == self.stackedWidget.count():
-            stratTest = scipy.stats.ttest_ind(self.optAlloc_p_st, self.propAlloc_p_st)
-            allTest = scipy.stats.ttest_ind(self.optAlloc_all, self.propAlloc_all)
+        allocationStrategy = self.setupWidget.GetAllocationStrategy()
+        initialGuesses = np.array(self.initalGuessWidget.initialGuesses)
+        confidence = self.setupWidget.GetConfidence()
+        moe = self.setupWidget.GetMOE()
+        imagePath = self.setupWidget.imagePathBox.text()
 
-            print("Stratified p_h:")
-            print(f"t-test statistic: {stratTest.statistic}")
-            print(f"t-test p-value: {stratTest.pvalue}")
-            print()
+        # Initialize widget
+        self.constituentCountingWidget.InitializeCounting(initialGuesses, imagePath, allocationStrategy, countAreaType, countAreaBounds, confidence, moe)
 
-            print("All samples p_h:")
-            print(f"t-test statistic: {allTest.statistic}")
-            print(f"t-test p-value: {allTest.pvalue}")
-            print()
-            
-            quit()
-        else:
-            self.stackedWidget.setCurrentIndex(self.stackedWidget.currentIndex() + 1)
-        
-        self.stackedWidget.currentWidget().InitializeCounting(self.initialGuesses)
+        # Change active widget
+        self.stackedWidget.setCurrentIndex(2)
 
 
 def AutoAnalyzeSimImages():
@@ -1037,7 +1140,7 @@ def AutoAnalyzeSimImages():
     files.sort()
     numStrata_N = 3
     MOE = 0.01
-    alpha = 0.95
+    confidence = 0.95
     e_moe = 0.01
 
     guessValues = np.array([0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95])
@@ -1106,7 +1209,7 @@ def AutoAnalyzeSimImages():
                     break
                 lastGuess = n
 
-                lowerCL, upperCL = scipy.stats.binom.interval(alpha, n, initialStrataProportion)
+                lowerCL, upperCL = scipy.stats.binom.interval(confidence, n, initialStrataProportion)
                 lowerCL /= n
                 upperCL /= n
 
@@ -1205,7 +1308,7 @@ def AutoAnalyzeSimImages():
             p_st_opt = np.sum(p_h_opt) * N_h / N
             p_h_opt = np.array(p_h_opt)
 
-            lowerCL, upperCL = scipy.stats.binom.interval(alpha, np.sum(n_h_prop), p_st_opt) # Use n_h_prop to keep consistent MOE size
+            lowerCL, upperCL = scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_opt) # Use n_h_prop to keep consistent MOE size
             lowerCL /= np.sum(n_h_prop)
             upperCL /= np.sum(n_h_prop)
 
@@ -1246,8 +1349,8 @@ def AutoAnalyzeSimImages():
             p_st_prop = np.sum(p_h_prop) * N_h / N
             p_h_prop = np.array(p_h_prop)
 
-            scipy.stats.binom.interval(alpha, np.sum(n_h_prop), p_st_prop)
-            lowerCL, upperCL = scipy.stats.binom.interval(alpha, np.sum(n_h_prop), p_st_prop)
+            scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
+            lowerCL, upperCL = scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
             lowerCL /= np.sum(n_h_prop)
             upperCL /= np.sum(n_h_prop)
 
@@ -1290,8 +1393,8 @@ def AutoAnalyzeSimImages():
             # p_st_prop = np.sum(p_h_prop) * N_h / N
             # p_h_prop = np.array(p_h_prop)
 
-            # scipy.stats.binom.interval(alpha, np.sum(n_h_prop), p_st_prop)
-            # lowerCL, upperCL = scipy.stats.binom.interval(alpha, np.sum(n_h_prop), p_st_prop)
+            # scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
+            # lowerCL, upperCL = scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
             # lowerCL /= np.sum(n_h_prop)
             # upperCL /= np.sum(n_h_prop)
 
@@ -1312,17 +1415,7 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    files = os.listdir("OptimalAllocationStudy")
-    files.sort()
-
-    filename = f"OptimalAllocationStudy/{files[0]}"
-    print(filename)
-    alpha = 0.95
-    MOE = 0.05
-    e_moe=0.01
-    strataGrid_N = 4
-
-    win = MyWindow(filename, strataGrid_N, alpha, MOE, e_moe, useBothAllocations=True)
+    win = MyWindow()
 
     win.show()
     sys.exit(app.exec_())
