@@ -1,10 +1,10 @@
 import numpy as np
-import scipy.special
 import scipy.stats
 from skimage import io
 from skimage.color import gray2rgb
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.path
 matplotlib.use("Qt5Agg")
 from PyQt5 import QtWidgets, QtGui, QtCore
 from PyQt5.QtWidgets import QApplication, QMainWindow
@@ -14,6 +14,10 @@ from matplotlib.figure import Figure
 import os
 import csv
 import cv2
+
+
+# TODO: Make it so that non-square grids can be used for full and rectangular crop (e.g., 8 strata turned into 4x2 grid)
+# TODO: Figure out where to input number of strata (maybe add a step 5), or keep it fixed for now
 
 # Class used to aid in displaying the image with grid overlayed onto sampled pixels
 class PixelMap:
@@ -67,6 +71,9 @@ class PixelMap:
 
     def GetCroppedImage(self, leftBound, rightBound, topBound, bottomBound):
         return self.originalImage[topBound:bottomBound, leftBound:rightBound]
+    
+    def GetCroppedAndMaskedImage(self, leftBound, rightBound, topBound, bottomBound, polygonPoints):
+        return self.originalImage[topBound:bottomBound, leftBound:rightBound]
 
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -75,6 +82,485 @@ class MplCanvas(FigureCanvasQTAgg):
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = fig.add_subplot(111)
         super(MplCanvas, self).__init__(fig)
+
+
+class SetupWidget(QtWidgets.QWidget):
+    def __init__(self, parentTab):
+        super(SetupWidget, self).__init__()
+
+        self.parentTab = parentTab
+        self.countAreaBounds = None
+
+        # Step 1 widgets and layout
+        self.step1Number = QtWidgets.QLabel("1")
+        self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.selectImageText = QtWidgets.QLabel("Select Image:")
+        self.imagePathBox = QtWidgets.QLineEdit("")
+        self.browseImagePath = QtWidgets.QPushButton("Browse")
+
+        step1layout = QtWidgets.QHBoxLayout()
+        step1layout.addWidget(self.step1Number)
+        step1layout.addWidget(self.selectImageText)
+        step1layout.addWidget(self.imagePathBox, stretch=2)
+        step1layout.addWidget(self.browseImagePath)
+
+        self.step1Widget = QtWidgets.QWidget()
+        self.step1Widget.setLayout(step1layout)
+
+        # Step 2 widgets and layout
+        self.step2Number = QtWidgets.QLabel("2")
+        self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.selectCountAreaText = QtWidgets.QLabel("Select Count Area")
+        self.selectFullImageButton = QtWidgets.QPushButton("Full Image")
+        self.selectFullImageButton.setCheckable(True)
+        self.selectRectCropButton = QtWidgets.QPushButton("Rectangular Crop")
+        self.selectRectCropButton.setCheckable(True)
+        self.selectCircCropButton = QtWidgets.QPushButton("Circular Crop")
+        self.selectCircCropButton.setCheckable(True)
+        self.selectAnnularCropButton = QtWidgets.QPushButton("Annular Crop")
+        self.selectAnnularCropButton.setCheckable(True)
+        
+        self.selectFullImageButton.setDisabled(True)
+        self.selectRectCropButton.setDisabled(True)
+        self.selectCircCropButton.setDisabled(True)
+        self.selectAnnularCropButton.setDisabled(True)
+
+        step2layout = QtWidgets.QHBoxLayout()
+        step2layout.addWidget(self.step2Number)
+        step2layout.addWidget(self.selectCountAreaText,stretch=2)
+        step2layout.addWidget(self.selectFullImageButton,stretch=2)
+        step2layout.addWidget(self.selectRectCropButton,stretch=2)
+        step2layout.addWidget(self.selectCircCropButton,stretch=2)
+        step2layout.addWidget(self.selectAnnularCropButton,stretch=2)
+
+        self.step2Widget = QtWidgets.QWidget()
+        self.step2Widget.setLayout(step2layout)
+
+        # Step 3 widgets and layout
+        self.step3Number = QtWidgets.QLabel("3")
+        self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.selectAllocationText = QtWidgets.QLabel("Select Allocation Method:")
+        self.selectProportionalButton = QtWidgets.QPushButton("Proportional")
+        self.selectProportionalButton.setCheckable(True)
+        self.selectOptimalButton = QtWidgets.QPushButton("Optimal")
+        self.selectOptimalButton.setCheckable(True)
+
+        step3layout = QtWidgets.QHBoxLayout()
+        step3layout.addWidget(self.step3Number)
+        step3layout.addWidget(self.selectAllocationText,stretch=2)
+        step3layout.addWidget(self.selectProportionalButton,stretch=2)
+        step3layout.addWidget(self.selectOptimalButton,stretch=2)
+
+        self.step3Widget = QtWidgets.QWidget()
+        self.step3Widget.setLayout(step3layout)
+
+        # Step 4 widgets and layout
+        self.step4Number = QtWidgets.QLabel("4")
+        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.setCItext = QtWidgets.QLabel("Set CI:")
+        self.setCIbox = QtWidgets.QLineEdit("")
+        self.setMOEtext = QtWidgets.QLabel("Set MOE:")
+        self.setMOEbox = QtWidgets.QLineEdit("")
+
+        step4layout = QtWidgets.QHBoxLayout()
+        step4layout.addWidget(self.step4Number)
+        step4layout.addWidget(self.setCItext)
+        step4layout.addWidget(self.setCIbox)
+        step4layout.addWidget(self.setMOEtext)
+        step4layout.addWidget(self.setMOEbox)
+
+        self.step4Widget = QtWidgets.QWidget()
+        self.step4Widget.setLayout(step4layout)
+
+        # Begin measurement button
+        self.beginMeasurementButton = QtWidgets.QPushButton("Begin Measurement")
+
+        # Export results button
+        self.exportPreviousResultsButton = QtWidgets.QPushButton("Export previous results to csv")
+        
+        # Previous results table
+        self.previousResultsTable = QtWidgets.QTableWidget()
+        self.previousResultsTable.setRowCount(1)
+        self.previousResultsTable.setColumnCount(5)
+        self.previousResultsTable.setItem(0,0, QtWidgets.QTableWidgetItem("Image Name"))
+        self.previousResultsTable.setItem(0,1, QtWidgets.QTableWidgetItem("Allocation"))
+        self.previousResultsTable.setItem(0,2, QtWidgets.QTableWidgetItem("Area Fraction"))
+        self.previousResultsTable.setItem(0,3, QtWidgets.QTableWidgetItem("Confidence Interval"))
+        self.previousResultsTable.setItem(0,4, QtWidgets.QTableWidgetItem("Margin of Error"))
+        self.previousResultsTable.setStyleSheet("border: 1px solid black; gridline-color: gray")
+        self.previousResultsTable.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.previousResultsTable.verticalHeader().setVisible(False)
+        self.previousResultsTable.horizontalHeader().setVisible(False)
+        font = QtGui.QFont("Arial", 12)
+        font.setBold(True)
+        for i in range(5):
+            self.previousResultsTable.item(0, i).setBackground(QtGui.QColor(196,217,244))
+            self.previousResultsTable.item(0, i).setFont(font)
+            self.previousResultsTable.item(0, i).setTextAlignment(QtCore.Qt.AlignCenter)
+
+        # Empty space separator
+        empty = QtWidgets.QFrame()
+
+        # Full widget layout
+        fullWidgetLayout = QtWidgets.QVBoxLayout()
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step1Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step2Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step3Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.step4Widget, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.beginMeasurementButton, stretch=1)
+        fullWidgetLayout.addWidget(empty, stretch=1)
+        fullWidgetLayout.addWidget(self.previousResultsTable)
+        fullWidgetLayout.addWidget(self.exportPreviousResultsButton)
+
+        self.setLayout(fullWidgetLayout)
+
+        # Connect triggers
+        self.imagePathBox.textChanged.connect(self.CheckImagePath)
+        self.browseImagePath.clicked.connect(self.BrowseForImage)
+        self.selectFullImageButton.clicked.connect(self.SelectFullImage)
+        self.selectRectCropButton.clicked.connect(self.RectangularCrop)
+        self.selectCircCropButton.clicked.connect(self.CircularCrop)
+        self.selectAnnularCropButton.clicked.connect(self.AnnularCrop)
+        self.selectOptimalButton.clicked.connect(self.SelectOptimal)
+        self.selectProportionalButton.clicked.connect(self.SelectProportional)
+        self.beginMeasurementButton.clicked.connect(self.BeginMeasurement)
+        self.setMOEbox.textChanged.connect(self.CheckMOEandCI)
+        self.setCIbox.textChanged.connect(self.CheckMOEandCI)
+        self.exportPreviousResultsButton.clicked.connect(self.WriteResultsToCsv)
+    
+    def SelectOptimal(self):
+        self.selectProportionalButton.setChecked(False)
+        self.selectOptimalButton.setChecked(True)
+        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+        
+    def SelectProportional(self):
+        self.selectProportionalButton.setChecked(True)
+        self.selectOptimalButton.setChecked(False)
+        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+
+    def SelectFullImage(self):
+        self.selectFullImageButton.setChecked(True)
+        self.selectRectCropButton.setChecked(False)
+        self.selectCircCropButton.setChecked(False)
+        self.selectAnnularCropButton.setChecked(False)
+
+        self.countAreaBounds = None
+        self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+
+    def RectangularCrop(self):
+        self.selectFullImageButton.setChecked(False)
+        self.selectRectCropButton.setChecked(True)
+        self.selectCircCropButton.setChecked(False)
+        self.selectAnnularCropButton.setChecked(False)
+
+        img = cv2.imread(self.imagePathBox.text())
+
+        # top left x, top left y, width, height
+        self.countAreaBounds = cv2.selectROI("Select a ROI and then press ENTER button", img)
+        cv2.destroyWindow('Select a ROI and then press ENTER button')
+
+        if self.countAreaBounds[2] == 0 and self.countAreaBounds[3] == 0:
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color; font: bold 24px")
+            self.selectRectCropButton.setChecked(False)
+        else:
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+
+    def CircularCrop(self):
+        self.selectFullImageButton.setChecked(False)
+        self.selectRectCropButton.setChecked(False)
+        self.selectCircCropButton.setChecked(True)
+        self.selectAnnularCropButton.setChecked(False)
+
+        coords = [None, None, None]
+        img = cv2.imread(self.imagePathBox.text())
+
+        # mouse callback function
+        def draw_circle(event,x,y,flags,param):      
+            if event == cv2.EVENT_LBUTTONUP:
+                if param[0] is None:
+                    param[0] = x
+                    param[1] = y
+                    cv2.circle(img,(x,y), 5, (0,0,255), -1)
+                elif param[2] is None:
+                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    else:
+                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
+
+                        # find points along radius that divide circle into 16 strata
+                        thetas = np.linspace(0,2*np.pi, 17)
+                        for theta in thetas:
+                            endPointX = int(param[2] * np.cos(theta))
+                            endPointY = int(param[2] * np.sin(theta))
+                            endPointX += param[0]
+                            endPointY += param[1]
+                            cv2.line(img, (param[0], param[1]), (endPointX, endPointY), (0, 0, 255), 2)
+        
+        cv2.namedWindow('image')
+        cv2.setMouseCallback('image',draw_circle, param=coords)
+
+        while(1):
+            cv2.imshow('image',img)
+            k = cv2.waitKey(1) & 0xFF
+            if k == 10 or k == 13 or k == ord("q"):
+                break
+        cv2.destroyAllWindows()
+
+        if coords[0] is not None and coords[2] is not None:
+            self.countAreaBounds = coords
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+        else:
+            self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
+            self.selectCircCropButton.setChecked(False)
+
+    def AnnularCrop(self):
+        self.selectFullImageButton.setChecked(False)
+        self.selectRectCropButton.setChecked(False)
+        self.selectCircCropButton.setChecked(False)
+        self.selectAnnularCropButton.setChecked(True)
+
+        coords = [None, None, None, None]
+        img = cv2.imread(self.imagePathBox.text())
+
+        # mouse callback function
+        def draw_circle(event,x,y,flags,param):      
+            if event == cv2.EVENT_LBUTTONUP:
+                if param[0] is None:
+                    param[0] = x
+                    param[1] = y
+                    cv2.circle(img,(x,y), 5, (0,0,255), -1)
+                elif param[2] is None:
+                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    else:
+                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
+                elif param[3] is None:
+                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                        msg = QtWidgets.QMessageBox()
+                        msg.setIcon(QtWidgets.QMessageBox.Critical)
+                        msg.setText("Error")
+                        msg.setInformativeText('Circle extends beyond image bounds.')
+                        msg.setWindowTitle("Error")
+                        msg.exec_()
+                    else:
+                        param[3] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
+                        cv2.circle(img, (param[0], param[1]), param[3], (0, 0, 255), 2)
+
+                        # find points along radius that divide circle into 16 strata
+                        thetas = np.linspace(0,2*np.pi, 17)
+                        for theta in thetas:
+                            startPointX = int(param[2] * np.cos(theta))
+                            startPointY = int(param[2] * np.sin(theta))
+                            startPointX += param[0]
+                            startPointY += param[1]
+                            endPointX = int(param[3] * np.cos(theta))
+                            endPointY = int(param[3] * np.sin(theta))
+                            endPointX += param[0]
+                            endPointY += param[1]
+                            cv2.line(img, (startPointX, startPointY), (endPointX, endPointY), (0, 0, 255), 2)
+        
+        cv2.namedWindow('image')
+        cv2.setMouseCallback('image',draw_circle, param=coords)
+
+        while(1):
+            cv2.imshow('image',img)
+            k = cv2.waitKey(1) & 0xFF
+            if k == 10 or k == 13 or k == ord("q"):
+                break
+        cv2.destroyAllWindows()
+
+        if coords[0] is not None and coords[2] is not None and coords[3] is not None:
+            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+            self.countAreaBounds = coords
+        else:
+            self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
+            self.selectAnnularCropButton.setChecked(False)
+
+    def BrowseForImage(self):
+        fileName = QtWidgets.QFileDialog.getOpenFileName(self,'Select Image File','./')
+        if fileName is not None:
+            self.imagePathBox.setText(fileName[0])
+
+    def BeginMeasurement(self):
+        c1 = self.step1Number.palette().button().color().name()
+        c2 = self.step2Number.palette().button().color().name()
+        c3 = self.step3Number.palette().button().color().name()
+        c4 = self.step4Number.palette().button().color().name()
+
+        if c1 == "#90ee90" and c2 == "#90ee90" and c3 == "#90ee90" and c4 == "#90ee90":
+            self.parentTab.MoveToInitialGuessWidget()
+        else:
+            msg = QtWidgets.QMessageBox()
+            msg.setIcon(QtWidgets.QMessageBox.Critical)
+            msg.setText("Error")
+            msg.setInformativeText('Not all input steps have been completed.')
+            msg.setWindowTitle("Error")
+            msg.exec_()
+
+    def CheckImagePath(self):
+        try:
+            io.imread(self.imagePathBox.text(), as_gray=True)
+            self.step1Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+            self.selectFullImageButton.setEnabled(True)
+            self.selectRectCropButton.setEnabled(True)
+            self.selectCircCropButton.setEnabled(True)
+            self.selectAnnularCropButton.setEnabled(True)
+        except:
+            self.step1Number.setStyleSheet("border: 3px solid black; background-color: yellow; font: bold 24px")
+            self.selectFullImageButton.setChecked(False)
+            self.selectRectCropButton.setChecked(False)
+            self.selectCircCropButton.setChecked(False)
+            self.selectAnnularCropButton.setChecked(False)
+
+            self.selectFullImageButton.setDisabled(True)
+            self.selectRectCropButton.setDisabled(True)
+            self.selectCircCropButton.setDisabled(True)
+            self.selectAnnularCropButton.setDisabled(True)
+        
+        self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
+
+    def CheckMOEandCI(self):
+        try:
+            moe = self.setMOEbox.text()
+            moe = moe.split("%")[0]
+            moe = float(moe)
+
+            ci = self.setCIbox.text()
+            ci = ci.split("%")[0]
+            ci = float(ci)
+
+            self.step4Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+        except:
+            self.step4Number.setStyleSheet("border: 3px solid black; font: bold 24px")
+
+    def GetAllocationStrategy(self):
+        if self.selectOptimalButton.isChecked():
+            return "Optimal"
+        elif self.selectProportionalButton.isChecked():
+            return "Proportional"
+        else:
+            return None
+
+    def GetConfidence(self):
+        ci = self.setCIbox.text()
+        ci = ci.split("%")[0]
+        ci = float(ci)
+
+        # put confidence into 0,1 interval
+        if ci > 1:
+            ci /= 100
+
+        return ci
+
+    def GetMOE(self):
+        moe = self.setMOEbox.text()
+        moe = moe.split("%")[0]
+        moe = float(moe)
+
+        if moe > 1:
+            moe /= 100
+
+        return moe
+
+    def AddResultsToTable(self, p_st, lowerCL, upperCL):
+        rowPosition = self.previousResultsTable.rowCount()
+        self.previousResultsTable.insertRow(rowPosition)
+        
+        self.previousResultsTable.setItem(rowPosition,0, QtWidgets.QTableWidgetItem(f"{os.path.basename(self.imagePathBox.text())}"))
+        self.previousResultsTable.setItem(rowPosition,1, QtWidgets.QTableWidgetItem(self.GetAllocationStrategy()))
+        self.previousResultsTable.setItem(rowPosition,2, QtWidgets.QTableWidgetItem(f"{100*p_st:.2f}%"))
+        self.previousResultsTable.setItem(rowPosition,3, QtWidgets.QTableWidgetItem(f"{int(self.GetConfidence()*100)}% CI: ({100*lowerCL:.1f}%, {100*upperCL:.1f}%)"))
+        self.previousResultsTable.setItem(rowPosition,4, QtWidgets.QTableWidgetItem(f"{100*(upperCL-lowerCL)/2:.2f}%"))
+
+    def Clear(self):
+        # Reset step 1 text
+        self.imagePathBox.setText("")
+
+        # Reset number highlights
+        self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
+        
+
+        # Reset step 2 buttons
+        self.selectFullImageButton.setChecked(False)
+        self.selectRectCropButton.setChecked(False)
+        self.selectCircCropButton.setChecked(False)
+        self.selectAnnularCropButton.setChecked(False)
+
+        self.selectFullImageButton.setDisabled(True)
+        self.selectRectCropButton.setDisabled(True)
+        self.selectCircCropButton.setDisabled(True)
+        self.selectAnnularCropButton.setDisabled(True)
+
+        self.countAreaBounds = None
+
+        # Reset step 3 buttons
+        self.selectOptimalButton.setChecked(False)
+        self.selectProportionalButton.setChecked(False)
+
+        # Reset step 4 text
+        self.setMOEbox.setText("")
+        self.setCIbox.setText("")
+
+    def WriteResultsToCsv(self):
+        if self.previousResultsTable.rowCount() == 1:
+            return
+        else:
+            if os.path.exists("AreaFractionResults.csv"):
+                startRow = 1
+            else:
+                startRow = 0
+            with open("AreaFractionResults.csv", "a", newline="") as file:
+                writer = csv.writer(file)
+                for i in range(startRow, self.previousResultsTable.rowCount()):
+                    rowToWrite = []
+                    for j in range(5):
+                        rowToWrite.append(self.previousResultsTable.item(i, j).text())
+                    
+                    writer.writerow(rowToWrite)
 
 
 class InitialGuessWidget(QtWidgets.QWidget):
@@ -130,104 +616,129 @@ class InitialGuessWidget(QtWidgets.QWidget):
         vbox.addWidget(self.buttonRegion)
         self.setLayout(vbox)
 
-    def ReadImage(self, imagePath, numStrata_N, countAreaType, countAreaBounds=None):
+    def ReadImage(self, imagePath, numStrata, countAreaType, countAreaBounds=None):
         self.imagePath = imagePath
         self.originalImage = io.imread(imagePath, as_gray=True)
-        self.numStrata_N = numStrata_N
+        self.numStrata = numStrata
+        self.countAreaType = countAreaType
+        self.countAreaBounds = countAreaBounds
 
         self.originalImage = io.imread(imagePath, as_gray=True)
 
         self.myMap = PixelMap(self.originalImage)
         self.N = self.myMap.numPixels
-
-        self.leftBounds = []
-        self.rightBounds = []
-        self.topBounds = []
-        self.bottomBounds = []
-
-        if countAreaType == "Full":
-            for i in range(self.numStrata_N):
-                topBound = int(i*self.myMap.rows/self.numStrata_N)
-                bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
-                for j in range(self.numStrata_N):
-                    leftBound = int(j*self.myMap.cols/self.numStrata_N)
-                    rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
-
-                    self.leftBounds.append(leftBound)
-                    self.rightBounds.append(rightBound)
-                    self.topBounds.append(topBound)
-                    self.bottomBounds.append(bottomBound)
         
-        # FIXME: Test this
-        elif countAreaType == "Rectangular":
-            for i in range(self.numStrata_N):
-                topBound = int(i*self.myMap.rows/self.numStrata_N) + countAreaBounds[0]
-                bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N) - (self.myMap.rows-countAreaBounds[1])
-                for j in range(self.numStrata_N):
-                    leftBound = int(j*self.myMap.cols/self.numStrata_N) + countAreaBounds[2]
-                    rightBound = int((j+1)*self.myMap.cols/self.numStrata_N) - (self.myMap.cols-countAreaBounds[3])
-
-                    self.leftBounds.append(leftBound)
-                    self.rightBounds.append(rightBound)
-                    self.topBounds.append(topBound)
-                    self.bottomBounds.append(bottomBound)
-        
-        # FIXME: Write this
-        elif countAreaType == "Circular":
-            for i in range(self.numStrata_N):
-                topBound = int(i*self.myMap.rows/self.numStrata_N) + countAreaBounds[0]
-                bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N) - (self.myMap.rows-countAreaBounds[1])
-                for j in range(self.numStrata_N):
-                    leftBound = int(j*self.myMap.cols/self.numStrata_N) + countAreaBounds[2]
-                    rightBound = int((j+1)*self.myMap.cols/self.numStrata_N) - (self.myMap.cols-countAreaBounds[3])
-
-                    self.leftBounds.append(leftBound)
-                    self.rightBounds.append(rightBound)
-                    self.topBounds.append(topBound)
-                    self.bottomBounds.append(bottomBound)
-        
-        # FIXME: Write this
-        elif countAreaType == "Annular":
-            for i in range(self.numStrata_N):
-                topBound = int(i*self.myMap.rows/self.numStrata_N) + countAreaBounds[0]
-                bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N) - (self.myMap.rows-countAreaBounds[1])
-                for j in range(self.numStrata_N):
-                    leftBound = int(j*self.myMap.cols/self.numStrata_N) + countAreaBounds[2]
-                    rightBound = int((j+1)*self.myMap.cols/self.numStrata_N) - (self.myMap.cols-countAreaBounds[3])
-
-                    self.leftBounds.append(leftBound)
-                    self.rightBounds.append(rightBound)
-                    self.topBounds.append(topBound)
-                    self.bottomBounds.append(bottomBound)
-        
-        else:
-            pass
-
-        self.sc.axes.cla()
-        self.sc.axes.imshow(self.myMap.GetCroppedImage(self.leftBounds[self.strataIndex], 
-                                                       self.rightBounds[self.strataIndex], 
-                                                       self.topBounds[self.strataIndex], 
-                                                       self.bottomBounds[self.strataIndex]),
-                                                       cmap="gray", vmin=0, vmax=255)
-        self.sc.axes.set_yticks([])
-        self.sc.axes.set_xticks([])
-        self.sc.draw()
+        self.strataIndex = 0
+        self.DisplayStrata()
 
     def LogEstimate(self, value):
         self.initialGuesses.append(value)
 
         self.strataIndex += 1
 
-        if self.strataIndex == self.numStrata_N**2:
+        if self.strataIndex == self.numStrata:
             self.parentTab.MoveToConstituentCountWidget()
             return
 
+        self.DisplayStrata()
+
+    def DisplayStrata(self):
+
+        # left,right,top,bottom bounds are rectangular bounds
+        # for full and rectangular crop, this is equal to displayed region
+        # for circular and annular, this is a box around the quarter circle in which the stratum lies
+
+        if self.countAreaType == "Full":
+            numStrata_N = int(np.sqrt(self.numStrata))
+            unraveledStrataIndex = np.unravel_index(self.strataIndex, (numStrata_N, numStrata_N))
+            row = unraveledStrataIndex[0]
+            col = unraveledStrataIndex[1]
+
+            topBound = int(row*self.myMap.rows/numStrata_N)
+            bottomBound = int((row+1)*self.myMap.rows/numStrata_N)
+            leftBound = int(col*self.myMap.cols/numStrata_N)
+            rightBound = int((col+1)*self.myMap.cols/numStrata_N)
+
+            image = self.myMap.GetCroppedImage(leftBound, rightBound, topBound, bottomBound)   
+        
+        elif self.countAreaType == "Rectangular":
+            numStrata_N = int(np.sqrt(self.numStrata))
+            unraveledStrataIndex = np.unravel_index(self.strataIndex, (numStrata_N, numStrata_N))
+            row = unraveledStrataIndex[0]
+            col = unraveledStrataIndex[1]
+
+            topBound = int(self.countAreaBounds[1] + (row / numStrata_N) * self.countAreaBounds[3])
+            bottomBound = int(self.countAreaBounds[1] + ((row+1) / numStrata_N) * self.countAreaBounds[3])
+            leftBound = int(self.countAreaBounds[0] + (col / numStrata_N) * self.countAreaBounds[2])
+            rightBound = int(self.countAreaBounds[0] + ((col+1) / numStrata_N) * self.countAreaBounds[2])
+
+            image = self.myMap.GetCroppedImage(leftBound, rightBound, topBound, bottomBound)   
+        
+        # FIXME: Write this
+        elif self.countAreaType == "Circular":
+            # Square box around circle
+            topBound = self.countAreaBounds[1] - self.countAreaBounds[2] 
+            bottomBound = self.countAreaBounds[1] + self.countAreaBounds[2]
+            leftBound = self.countAreaBounds[0] - self.countAreaBounds[2]
+            rightBound = self.countAreaBounds[0] + self.countAreaBounds[2]
+
+            # Divide square into appropriate quarter
+            strataFraction = self.strataIndex / self.numStrata
+            if strataFraction < 0.25:
+                leftBound = self.countAreaBounds[0]
+                bottomBound = self.countAreaBounds[1]
+            elif strataFraction < 0.5:
+                rightBound = self.countAreaBounds[0]
+                bottomBound = self.countAreaBounds[1]
+            elif strataFraction < 0.75:
+                rightBound = self.countAreaBounds[0]
+                topBound = self.countAreaBounds[1]
+            else:
+                leftBound = self.countAreaBounds[0]
+                topBound = self.countAreaBounds[1]
+            
+            # find points along radius that divide circle into strata
+            thetas = np.linspace(0,2*np.pi, self.numStrata)
+
+            # further subdivide arc 
+            fineThetas = np.linspace(thetas[self.strataIndex], thetas[self.strataIndex+1], 10)
+
+            # store polygon points
+            polygon = [(self.countAreaBounds[0], self.countAreaBounds[1])]
+            for theta in fineThetas:
+                x = int(self.countAreaBounds[2] * np.cos(theta) + self.countAreaBounds[0])
+                y = int(self.countAreaBounds[2] * np.sin(theta) + self.countAreaBounds[1])
+
+                polygon.append((x,y)) 
+            
+            # TODO: Implement some algorithm to find if points are within polygon
+              
+        # FIXME: Write this
+        elif self.countAreaType == "Annular":
+            # Square box around circle
+            topBound = self.countAreaBounds[1] - self.countAreaBounds[3] 
+            bottomBound = self.countAreaBounds[1] + self.countAreaBounds[3]
+            leftBound = self.countAreaBounds[0] - self.countAreaBounds[3]
+            rightBound = self.countAreaBounds[0] + self.countAreaBounds[3]
+
+            # Divide square into appropriate quarter
+            strataFraction = self.strataIndex / self.numStrata_N
+            if strataFraction < 0.25:
+                leftBound = self.countAreaBounds[0]
+                bottomBound = self.countAreaBounds[1]
+            elif strataFraction < 0.5:
+                rightBound = self.countAreaBounds[0]
+                bottomBound = self.countAreaBounds[1]
+            elif strataFraction < 0.75:
+                rightBound = self.countAreaBounds[0]
+                topBound = self.countAreaBounds[1]
+            else:
+                leftBound = self.countAreaBounds[0]
+                topBound = self.countAreaBounds[1]
+
+
         self.sc.axes.cla()
-        self.sc.axes.imshow(self.myMap.GetCroppedImage(self.leftBounds[self.strataIndex], 
-                                                       self.rightBounds[self.strataIndex], 
-                                                       self.topBounds[self.strataIndex], 
-                                                       self.bottomBounds[self.strataIndex]),
-                                                       cmap="gray", vmin=0, vmax=255)
+        self.sc.axes.imshow(image, cmap="gray", vmin=0, vmax=255)
         self.sc.axes.set_yticks([])
         self.sc.axes.set_xticks([])
         self.sc.draw()
@@ -593,463 +1104,6 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         self.UpdateDisplay()
 
 
-class SetupWidget(QtWidgets.QWidget):
-    def __init__(self, parentTab):
-        super(SetupWidget, self).__init__()
-
-        self.parentTab = parentTab
-        self.countAreaBounds = None
-
-        # Step 1 widgets and layout
-        self.step1Number = QtWidgets.QLabel("1")
-        self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.selectImageText = QtWidgets.QLabel("Select Image:")
-        self.imagePathBox = QtWidgets.QLineEdit("")
-        self.browseImagePath = QtWidgets.QPushButton("Browse")
-
-        step1layout = QtWidgets.QHBoxLayout()
-        step1layout.addWidget(self.step1Number)
-        step1layout.addWidget(self.selectImageText)
-        step1layout.addWidget(self.imagePathBox, stretch=2)
-        step1layout.addWidget(self.browseImagePath)
-
-        self.step1Widget = QtWidgets.QWidget()
-        self.step1Widget.setLayout(step1layout)
-
-        # Step 2 widgets and layout
-        self.step2Number = QtWidgets.QLabel("2")
-        self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.selectCountAreaText = QtWidgets.QLabel("Select Count Area")
-        self.selectFullImageButton = QtWidgets.QPushButton("Full Image")
-        self.selectFullImageButton.setCheckable(True)
-        self.selectRectCropButton = QtWidgets.QPushButton("Rectangular Crop")
-        self.selectRectCropButton.setCheckable(True)
-        self.selectCircCropButton = QtWidgets.QPushButton("Circular Crop")
-        self.selectCircCropButton.setCheckable(True)
-        self.selectAnnularCropButton = QtWidgets.QPushButton("Annular Crop")
-        self.selectAnnularCropButton.setCheckable(True)
-        
-        self.selectFullImageButton.setDisabled(True)
-        self.selectRectCropButton.setDisabled(True)
-        self.selectCircCropButton.setDisabled(True)
-        self.selectAnnularCropButton.setDisabled(True)
-
-        step2layout = QtWidgets.QHBoxLayout()
-        step2layout.addWidget(self.step2Number)
-        step2layout.addWidget(self.selectCountAreaText,stretch=2)
-        step2layout.addWidget(self.selectFullImageButton,stretch=2)
-        step2layout.addWidget(self.selectRectCropButton,stretch=2)
-        step2layout.addWidget(self.selectCircCropButton,stretch=2)
-        step2layout.addWidget(self.selectAnnularCropButton,stretch=2)
-
-        self.step2Widget = QtWidgets.QWidget()
-        self.step2Widget.setLayout(step2layout)
-
-        # Step 3 widgets and layout
-        self.step3Number = QtWidgets.QLabel("3")
-        self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.selectAllocationText = QtWidgets.QLabel("Select Allocation Method:")
-        self.selectProportionalButton = QtWidgets.QPushButton("Proportional")
-        self.selectProportionalButton.setCheckable(True)
-        self.selectOptimalButton = QtWidgets.QPushButton("Optimal")
-        self.selectOptimalButton.setCheckable(True)
-
-        step3layout = QtWidgets.QHBoxLayout()
-        step3layout.addWidget(self.step3Number)
-        step3layout.addWidget(self.selectAllocationText,stretch=2)
-        step3layout.addWidget(self.selectProportionalButton,stretch=2)
-        step3layout.addWidget(self.selectOptimalButton,stretch=2)
-
-        self.step3Widget = QtWidgets.QWidget()
-        self.step3Widget.setLayout(step3layout)
-
-        # Step 4 widgets and layout
-        self.step4Number = QtWidgets.QLabel("4")
-        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.setCItext = QtWidgets.QLabel("Set CI:")
-        self.setCIbox = QtWidgets.QLineEdit("")
-        self.setMOEtext = QtWidgets.QLabel("Set MOE:")
-        self.setMOEbox = QtWidgets.QLineEdit("")
-
-        step4layout = QtWidgets.QHBoxLayout()
-        step4layout.addWidget(self.step4Number)
-        step4layout.addWidget(self.setCItext)
-        step4layout.addWidget(self.setCIbox)
-        step4layout.addWidget(self.setMOEtext)
-        step4layout.addWidget(self.setMOEbox)
-
-        self.step4Widget = QtWidgets.QWidget()
-        self.step4Widget.setLayout(step4layout)
-
-        # Begin measurement button
-        self.beginMeasurementButton = QtWidgets.QPushButton("Begin Measurement")
-
-        # Export results button
-        self.exportPreviousResultsButton = QtWidgets.QPushButton("Export previous results to csv")
-        
-        # Previous results table
-        self.previousResultsTable = QtWidgets.QTableWidget()
-        self.previousResultsTable.setRowCount(1)
-        self.previousResultsTable.setColumnCount(5)
-        self.previousResultsTable.setItem(0,0, QtWidgets.QTableWidgetItem("Image Name"))
-        self.previousResultsTable.setItem(0,1, QtWidgets.QTableWidgetItem("Allocation"))
-        self.previousResultsTable.setItem(0,2, QtWidgets.QTableWidgetItem("Area Fraction"))
-        self.previousResultsTable.setItem(0,3, QtWidgets.QTableWidgetItem("Confidence Interval"))
-        self.previousResultsTable.setItem(0,4, QtWidgets.QTableWidgetItem("Margin of Error"))
-        self.previousResultsTable.setStyleSheet("border: 1px solid black; gridline-color: gray")
-        self.previousResultsTable.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        self.previousResultsTable.verticalHeader().setVisible(False)
-        self.previousResultsTable.horizontalHeader().setVisible(False)
-        font = QtGui.QFont("Arial", 12)
-        font.setBold(True)
-        for i in range(5):
-            self.previousResultsTable.item(0, i).setBackground(QtGui.QColor(196,217,244))
-            self.previousResultsTable.item(0, i).setFont(font)
-            self.previousResultsTable.item(0, i).setTextAlignment(QtCore.Qt.AlignCenter)
-
-        # Empty space separator
-        empty = QtWidgets.QFrame()
-
-        # Full widget layout
-        fullWidgetLayout = QtWidgets.QVBoxLayout()
-        fullWidgetLayout.addWidget(empty, stretch=1)
-        fullWidgetLayout.addWidget(self.step1Widget, stretch=1)
-        fullWidgetLayout.addWidget(empty, stretch=1)
-        fullWidgetLayout.addWidget(self.step2Widget, stretch=1)
-        fullWidgetLayout.addWidget(empty, stretch=1)
-        fullWidgetLayout.addWidget(self.step3Widget, stretch=1)
-        fullWidgetLayout.addWidget(empty, stretch=1)
-        fullWidgetLayout.addWidget(self.step4Widget, stretch=1)
-        fullWidgetLayout.addWidget(empty, stretch=1)
-        fullWidgetLayout.addWidget(self.beginMeasurementButton, stretch=1)
-        fullWidgetLayout.addWidget(empty, stretch=1)
-        fullWidgetLayout.addWidget(self.previousResultsTable)
-        fullWidgetLayout.addWidget(self.exportPreviousResultsButton)
-
-        self.setLayout(fullWidgetLayout)
-
-        # Connect triggers
-        self.imagePathBox.textChanged.connect(self.CheckImagePath)
-        self.browseImagePath.clicked.connect(self.BrowseForImage)
-        self.selectFullImageButton.clicked.connect(self.SelectFullImage)
-        self.selectRectCropButton.clicked.connect(self.RectangularCrop)
-        self.selectCircCropButton.clicked.connect(self.CircularCrop)
-        self.selectAnnularCropButton.clicked.connect(self.AnnularCrop)
-        self.selectOptimalButton.clicked.connect(self.SelectOptimal)
-        self.selectProportionalButton.clicked.connect(self.SelectProportional)
-        self.beginMeasurementButton.clicked.connect(self.BeginMeasurement)
-        self.setMOEbox.textChanged.connect(self.CheckMOEandCI)
-        self.setCIbox.textChanged.connect(self.CheckMOEandCI)
-        self.exportPreviousResultsButton.clicked.connect(self.WriteResultsToCsv)
-    
-    def SelectOptimal(self):
-        self.selectProportionalButton.setChecked(False)
-        self.selectOptimalButton.setChecked(True)
-        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-        
-    def SelectProportional(self):
-        self.selectProportionalButton.setChecked(True)
-        self.selectOptimalButton.setChecked(False)
-        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-
-    def SelectFullImage(self):
-        self.selectFullImageButton.setChecked(True)
-        self.selectRectCropButton.setChecked(False)
-        self.selectCircCropButton.setChecked(False)
-        self.selectAnnularCropButton.setChecked(False)
-
-        self.countAreaBounds = None
-        self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-
-    def RectangularCrop(self):
-        self.selectFullImageButton.setChecked(False)
-        self.selectRectCropButton.setChecked(True)
-        self.selectCircCropButton.setChecked(False)
-        self.selectAnnularCropButton.setChecked(False)
-
-        img = cv2.imread(self.imagePathBox.text())
-
-        # top left x, top left y, width, height
-        self.countAreaBounds = cv2.selectROI("Select a ROI and then press ENTER button", img)
-        cv2.destroyWindow('Select a ROI and then press ENTER button')
-
-        if self.countAreaBounds[2] == 0 and self.countAreaBounds[3] == 0:
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color; font: bold 24px")
-            self.selectRectCropButton.setChecked(False)
-        else:
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-
-    def CircularCrop(self):
-        self.selectFullImageButton.setChecked(False)
-        self.selectRectCropButton.setChecked(False)
-        self.selectCircCropButton.setChecked(True)
-        self.selectAnnularCropButton.setChecked(False)
-
-        coords = [None, None, None]
-        img = cv2.imread(self.imagePathBox.text())
-
-        # mouse callback function
-        def draw_circle(event,x,y,flags,param):      
-            if event == cv2.EVENT_LBUTTONUP:
-                if param[0] is None:
-                    param[0] = x
-                    param[1] = y
-                    cv2.circle(img,(x,y), 5, (0,0,255), -1)
-                elif param[2] is None:
-                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
-                        msg = QtWidgets.QMessageBox()
-                        msg.setIcon(QtWidgets.QMessageBox.Critical)
-                        msg.setText("Error")
-                        msg.setInformativeText('Circle extends beyond image bounds.')
-                        msg.setWindowTitle("Error")
-                        msg.exec_()
-                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
-                        msg = QtWidgets.QMessageBox()
-                        msg.setIcon(QtWidgets.QMessageBox.Critical)
-                        msg.setText("Error")
-                        msg.setInformativeText('Circle extends beyond image bounds.')
-                        msg.setWindowTitle("Error")
-                        msg.exec_()
-                    else:
-                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
-        
-        cv2.namedWindow('image')
-        cv2.setMouseCallback('image',draw_circle, param=coords)
-
-        while(1):
-            cv2.imshow('image',img)
-            k = cv2.waitKey(1) & 0xFF
-            if k == 10 or k == 13 or k == ord("q"):
-                break
-        cv2.destroyAllWindows()
-
-        if coords[0] is not None and coords[2] is not None:
-            self.countAreaBounds = coords
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-        else:
-            self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
-            self.selectCircCropButton.setChecked(False)
-
-    def AnnularCrop(self):
-        self.selectFullImageButton.setChecked(False)
-        self.selectRectCropButton.setChecked(False)
-        self.selectCircCropButton.setChecked(False)
-        self.selectAnnularCropButton.setChecked(True)
-
-        coords = [None, None, None, None]
-        img = cv2.imread(self.imagePathBox.text())
-
-        # mouse callback function
-        def draw_circle(event,x,y,flags,param):      
-            if event == cv2.EVENT_LBUTTONUP:
-                if param[0] is None:
-                    param[0] = x
-                    param[1] = y
-                    cv2.circle(img,(x,y), 5, (0,0,255), -1)
-                elif param[2] is None:
-                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
-                        msg = QtWidgets.QMessageBox()
-                        msg.setIcon(QtWidgets.QMessageBox.Critical)
-                        msg.setText("Error")
-                        msg.setInformativeText('Circle extends beyond image bounds.')
-                        msg.setWindowTitle("Error")
-                        msg.exec_()
-                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
-                        msg = QtWidgets.QMessageBox()
-                        msg.setIcon(QtWidgets.QMessageBox.Critical)
-                        msg.setText("Error")
-                        msg.setInformativeText('Circle extends beyond image bounds.')
-                        msg.setWindowTitle("Error")
-                        msg.exec_()
-                    else:
-                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
-                elif param[3] is None:
-                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
-                        msg = QtWidgets.QMessageBox()
-                        msg.setIcon(QtWidgets.QMessageBox.Critical)
-                        msg.setText("Error")
-                        msg.setInformativeText('Circle extends beyond image bounds.')
-                        msg.setWindowTitle("Error")
-                        msg.exec_()
-                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
-                        msg = QtWidgets.QMessageBox()
-                        msg.setIcon(QtWidgets.QMessageBox.Critical)
-                        msg.setText("Error")
-                        msg.setInformativeText('Circle extends beyond image bounds.')
-                        msg.setWindowTitle("Error")
-                        msg.exec_()
-                    else:
-                        param[3] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                        cv2.circle(img, (param[0], param[1]), param[3], (0, 0, 255), 2)
-        
-        cv2.namedWindow('image')
-        cv2.setMouseCallback('image',draw_circle, param=coords)
-
-        while(1):
-            cv2.imshow('image',img)
-            k = cv2.waitKey(1) & 0xFF
-            if k == 10 or k == 13 or k == ord("q"):
-                break
-        cv2.destroyAllWindows()
-
-        if coords[0] is not None and coords[2] is not None and coords[3] is not None:
-            self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-            self.countAreaBounds = coords
-        else:
-            self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
-            self.selectAnnularCropButton.setChecked(False)
-
-    def BrowseForImage(self):
-        fileName = QtWidgets.QFileDialog.getOpenFileName(self,'Select Image File','./')
-        if fileName is not None:
-            self.imagePathBox.setText(fileName[0])
-
-    def BeginMeasurement(self):
-        c1 = self.step1Number.palette().button().color().name()
-        c2 = self.step2Number.palette().button().color().name()
-        c3 = self.step3Number.palette().button().color().name()
-        c4 = self.step4Number.palette().button().color().name()
-
-        if c1 == "#90ee90" and c2 == "#90ee90" and c3 == "#90ee90" and c4 == "#90ee90":
-            self.parentTab.MoveToInitialGuessWidget()
-        else:
-            msg = QtWidgets.QMessageBox()
-            msg.setIcon(QtWidgets.QMessageBox.Critical)
-            msg.setText("Error")
-            msg.setInformativeText('Not all input steps have been completed.')
-            msg.setWindowTitle("Error")
-            msg.exec_()
-
-    def CheckImagePath(self):
-        try:
-            io.imread(self.imagePathBox.text(), as_gray=True)
-            self.step1Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-            self.selectFullImageButton.setEnabled(True)
-            self.selectRectCropButton.setEnabled(True)
-            self.selectCircCropButton.setEnabled(True)
-            self.selectAnnularCropButton.setEnabled(True)
-        except:
-            self.step1Number.setStyleSheet("border: 3px solid black; background-color: yellow; font: bold 24px")
-            self.selectFullImageButton.setChecked(False)
-            self.selectRectCropButton.setChecked(False)
-            self.selectCircCropButton.setChecked(False)
-            self.selectAnnularCropButton.setChecked(False)
-
-            self.selectFullImageButton.setDisabled(True)
-            self.selectRectCropButton.setDisabled(True)
-            self.selectCircCropButton.setDisabled(True)
-            self.selectAnnularCropButton.setDisabled(True)
-        
-        self.step2Number.setStyleSheet("border: 3px solid black; font: bold 24px")
-
-    def CheckMOEandCI(self):
-        try:
-            moe = self.setMOEbox.text()
-            moe = moe.split("%")[0]
-            moe = float(moe)
-
-            ci = self.setCIbox.text()
-            ci = ci.split("%")[0]
-            ci = float(ci)
-
-            self.step4Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-        except:
-            self.step4Number.setStyleSheet("border: 3px solid black; font: bold 24px")
-
-    def GetAllocationStrategy(self):
-        if self.selectOptimalButton.isChecked():
-            return "Optimal"
-        elif self.selectProportionalButton.isChecked():
-            return "Proportional"
-        else:
-            return None
-
-    def GetConfidence(self):
-        ci = self.setCIbox.text()
-        ci = ci.split("%")[0]
-        ci = float(ci)
-
-        # put confidence into 0,1 interval
-        if ci > 1:
-            ci /= 100
-
-        return ci
-
-    def GetMOE(self):
-        moe = self.setMOEbox.text()
-        moe = moe.split("%")[0]
-        moe = float(moe)
-
-        if moe > 1:
-            moe /= 100
-
-        return moe
-
-    def AddResultsToTable(self, p_st, lowerCL, upperCL):
-        rowPosition = self.previousResultsTable.rowCount()
-        self.previousResultsTable.insertRow(rowPosition)
-        
-        self.previousResultsTable.setItem(rowPosition,0, QtWidgets.QTableWidgetItem(f"{os.path.basename(self.imagePathBox.text())}"))
-        self.previousResultsTable.setItem(rowPosition,1, QtWidgets.QTableWidgetItem(self.GetAllocationStrategy()))
-        self.previousResultsTable.setItem(rowPosition,2, QtWidgets.QTableWidgetItem(f"{100*p_st:.2f}%"))
-        self.previousResultsTable.setItem(rowPosition,3, QtWidgets.QTableWidgetItem(f"{int(self.GetConfidence()*100)}% CI: ({100*lowerCL:.1f}%, {100*upperCL:.1f}%)"))
-        self.previousResultsTable.setItem(rowPosition,4, QtWidgets.QTableWidgetItem(f"{100*(upperCL-lowerCL)/2:.2f}%"))
-
-    def Clear(self):
-        # Reset step 1 text
-        self.imagePathBox.setText("")
-
-        # Reset number highlights
-        self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        
-
-        # Reset step 2 buttons
-        self.selectFullImageButton.setChecked(False)
-        self.selectRectCropButton.setChecked(False)
-        self.selectCircCropButton.setChecked(False)
-        self.selectAnnularCropButton.setChecked(False)
-
-        self.selectFullImageButton.setDisabled(True)
-        self.selectRectCropButton.setDisabled(True)
-        self.selectCircCropButton.setDisabled(True)
-        self.selectAnnularCropButton.setDisabled(True)
-
-        self.countAreaBounds = None
-
-        # Reset step 3 buttons
-        self.selectOptimalButton.setChecked(False)
-        self.selectProportionalButton.setChecked(False)
-
-        # Reset step 4 text
-        self.setMOEbox.setText("")
-        self.setCIbox.setText("")
-
-    def WriteResultsToCsv(self):
-        if self.previousResultsTable.rowCount() == 1:
-            return
-        else:
-            if os.path.exists("AreaFractionResults.csv"):
-                startRow = 1
-            else:
-                startRow = 0
-            with open("AreaFractionResults.csv", "a", newline="") as file:
-                writer = csv.writer(file)
-                for i in range(startRow, self.previousResultsTable.rowCount()):
-                    rowToWrite = []
-                    for j in range(5):
-                        rowToWrite.append(self.previousResultsTable.item(i, j).text())
-                    
-                    writer.writerow(rowToWrite)
-
-
 class MyWindow(QMainWindow):
 
     def __init__(self):
@@ -1099,10 +1153,10 @@ class MyWindow(QMainWindow):
         # value will be none, array of length 3 (circ crop), or array of length 4 (rect or annular crop)
         countAreaBounds = self.setupWidget.countAreaBounds
 
-        numStrata_N = 2 if countAreaType == "Full" else 20
+        numStrata = 16
         
         # Initialize the initial guess widget
-        self.initalGuessWidget.ReadImage(imagePath, numStrata_N, countAreaType, countAreaBounds)
+        self.initalGuessWidget.ReadImage(imagePath, numStrata, countAreaType, countAreaBounds)
 
         # change active widget
         self.stackedWidget.setCurrentIndex(1)
@@ -1203,8 +1257,6 @@ def AutoAnalyzeSimImages():
             lastGuess = -1
             while not withinTolerance and currentIter < maxIters:
                 n = int(np.ceil(n))
-                # print(f"{lastGuess} -> {n}")
-                # print(d)
                 if n == lastGuess:
                     break
                 lastGuess = n
@@ -1413,6 +1465,7 @@ def AutoAnalyzeSimImages():
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
+    scipy.stats.binom.interval(0.95, 100, 10)
     app.setStyle("Fusion")
 
     win = MyWindow()
