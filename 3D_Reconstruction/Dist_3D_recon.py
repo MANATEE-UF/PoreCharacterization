@@ -687,23 +687,23 @@ def main():
 
     #Unprocessed Image Stack Input Directories:
     # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Central"
-    inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_MidRadial"
+    inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_MidRadial/BSE"
     # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Periphery"
     
     #FFT Filtered Image Stack Input Directories:
     # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/FFTFiltered"
-    fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/FFTFiltered"
+    fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE/FFTFiltered"
     # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/FFTFiltered"
 
     #Binary Pore Mask Input Directories:
     #Note: Must use unpadded directory! Padded directory is only used for mesh creation.
     # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/BinaryStack"
-    binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BinaryStack"
+    binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE/BinaryStack"
     # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/BinaryStack"
 
     #Base Output Directories:
     # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central"
-    outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial"
+    outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE"
     # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery"
 
     #Image Data:
@@ -728,7 +728,7 @@ def main():
 
 
 
-    # ########## Image Thresholding And Mesh Creation ##########
+    # ########## Image Thresholding ##########
     
     # fftFiltered = ReadImages(fftInDir, ".tif")
 
@@ -742,28 +742,43 @@ def main():
     # # SaveImages(voids, 'BinaryStack', outDir)
     # # SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
 
-    # paddedVoids = PadVoids(voids)\
+    # paddedVoids = PadVoids(voids)
     
     # #Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
     # # SaveImages(paddedVoids, 'BinaryStackPadded', outDir)
     # # SaveImages(paddedVoids.astype(np.uint8)*255, 'BinaryStackPadded', outDir)
-    
+
+
+
+    # ########## Mesh Generation (Pore Reconstruction) ##########
 
     # reconstruction = CreateMeshReconstruction(paddedVoids, 0.01, True)
 
     # SaveMeshAsSTL(reconstruction, '91T_MidRadial_99%_Reduced', 'PoreReconstruction', outDir)
 
+    # ########## Image Thresholding (Matrix Reconstruction) ##########
+
+    # binaryImages = ReadImages(binaryInDir, '.tif', convertToBinary=True)
+
+    # invertedBinary = np.logical_not(binaryImages)
+
+    # invertedBinary = PadVoids(invertedBinary)
+
+    # invertedReconstruction = CreateMeshReconstruction(invertedBinary, 0.01)
+
+    # SaveMeshAsSTL(invertedReconstruction, '91T_MidRadial_Inverted', 'PoreReconstruction', outDir)
 
 
-    ########## Pore Feature Calculations ##########
+
+    # ########## Pore Feature Calculations ##########
     
-    binaryImages = ReadImages(binaryInDir, '.tif', convertToBinary=True)
+    # binaryImages = ReadImages(binaryInDir, '.tif', convertToBinary=True)
     
-    numPores, poreVolumes, poreRadii, poreCentroids= CalculatePoreFeatures(binaryImages, resolution, convertUnits=True)
+    # numPores, poreVolumes, poreRadii, poreCentroids= CalculatePoreFeatures(binaryImages, resolution, convertUnits=True)
 
-    # PrintPoreStatistics(numPores, poreRadii)
+    # # PrintPoreStatistics(numPores, poreRadii)
 
-    print(np.sort(poreVolumes)[0:10])
+    # print(np.sort(poreVolumes)[0:10])
 
 if __name__ == "__main__":
     main()
