@@ -17,19 +17,39 @@ from tqdm import tqdm
 import meshlib.mrmeshpy as mr
 import meshlib.mrmeshnumpy as mrnumpy
 import seaborn as sns
+import time
 
 #Reads in grayscale images from a given directory of images. Does not read any files that do not have the specified file extension
 #Assumes image filenames are in the format: filename_#.fileExtension where # is the number of the image with leading 0s
 def ReadImages(inDir, fileExtension, convertToBinary=False):
-    image_list = os.listdir(inDir)
-    image_list = [file for file in image_list if file.endswith(fileExtension)]
-    image_list.sort()
-    
+    imageList = os.listdir(inDir)
+    imageList = [file for file in imageList if file.endswith(fileExtension)]
+    imageList.sort()
+
     images = []
-    for image_file in image_list:
+    shapes = set()
+    imageShapes = []
+    for image_file in imageList:
         image_path = os.path.join(inDir, image_file)
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+
+        if image is None:
+            print(f"Warning: Could not read {image_path}")
+            continue
+        
+        shapes.add(image.shape)
+        imageShapes.append((image_file, image.shape))
         images.append(image)
+
+    if len(shapes) > 1:
+        expectedShape = imageShapes[0][1]
+        print("Not all images are the same shape. Cannot convert to 3D array.")
+        print(f"Expected shape: {expectedShape}")
+        print("Offending files:")
+        for fname, shape in imageShapes:
+            if shape != expectedShape:
+                print(f" - {fname}: shape {shape}")        
+        raise ValueError("Image stack contains images of different shapes.")
 
     images = np.array(images)
     
@@ -40,13 +60,13 @@ def ReadImages(inDir, fileExtension, convertToBinary=False):
     return images
 
 #Rotates each image in the image stack about its center by a given angle
-def StackRotate(images, tiltAngleCCW):
+def StackRotate(images, tiltAngleCW):
     rotated = []
 
     for i, image in enumerate(images):
         if image is not None:
             h, w = image.shape[:2]
-            rotationMatrix = cv2.getRotationMatrix2D((w/2, h/2), tiltAngleCCW, 1.0)
+            rotationMatrix = cv2.getRotationMatrix2D((w/2, h/2), tiltAngleCW, 1.0)
             rotated_image = cv2.warpAffine(image, rotationMatrix, (w, h))
             rotated.append(rotated_image)
         else:
@@ -363,13 +383,13 @@ def ThreshFeedback(img, thresh):
     return float(highThresh)
 
 #Expands image and returns binary array containing the voids in each image slice based on a manually determined threshold value
-def Thresholding(fftFiltered, deltaZ):
+def Thresholding(fftFiltered, sliceThickness, resolution):
     fftFiltered = np.array(fftFiltered)
 
     smooth = gaussian(fftFiltered, sigma=0.5, mode='nearest', truncate=2.0)
     smooth = (smooth*255).astype(np.uint8)
 
-    smooth = ExpandImageStack(smooth, deltaZ)
+    # smooth = ExpandImageStack(smooth, sliceThickness, resolution)
 
     thresh = threshold_multiotsu(smooth, classes=5)
 
@@ -422,13 +442,13 @@ def AltThreshFeedback(img, originalImg, thresh):
     
     return float(highThresh)
 
-def AltThresholding(fftFiltered, deltaZ):
+def AltThresholding(fftFiltered, sliceThickness, resolution):
     fftFiltered = np.array(fftFiltered)
 
     smooth = gaussian(fftFiltered, sigma=0.5, mode='nearest', truncate=2.0)
     smooth = np.array((smooth*255)).astype(np.uint8)
 
-    smooth = ExpandImageStack(smooth, deltaZ)
+    # smooth = ExpandImageStack(smooth, sliceThickness, resolution)
 
     modifiedSmooth = []
     for img in smooth:
@@ -444,7 +464,7 @@ def AltThresholding(fftFiltered, deltaZ):
 
     thresh = AltThreshFeedback(modifiedSmooth, smooth, thresh)
 
-    voids = smooth < thresh
+    voids = modifiedSmooth > thresh
 
     return smooth, voids
 
@@ -456,9 +476,9 @@ def EnhanceContrast(img, lowerPercentile, upperPercentile):
 
     return stretchedImg
 
-def SauvolaThresholding(fftFiltered, deltaZ, contrastLowerPercentile, contrastUpperPercentile, sigma, threshSize):
+def SauvolaThresholding(fftFiltered, sliceThickness, resolution, contrastLowerPercentile, contrastUpperPercentile, sigma, threshSize):
     smooth = np.copy(fftFiltered)
-    smooth = ExpandImageStack(smooth, deltaZ)
+    # smooth = ExpandImageStack(smooth, sliceThickness, resolution)
 
     voids = []
     for i, img in enumerate(tqdm(smooth, desc='Applying Sauvola Image Threshold')):
@@ -472,9 +492,20 @@ def SauvolaThresholding(fftFiltered, deltaZ, contrastLowerPercentile, contrastUp
     
     return smooth, np.array(voids)
 
+def ResampleToIsotropic(images, sliceThickness, resolution):
+    originalNumSlices = images.shape[0]
+    totalDepth = (originalNumSlices - 1) * sliceThickness
+    targetNumSlices = round((totalDepth / resolution) + 1)  # fewer slices now
+
+    newShape = (targetNumSlices, images.shape[1], images.shape[2])
+    resizedImages = resize(images, newShape, order=3, preserve_range=True, anti_aliasing=True)
+    return resizedImages
+
+
 def EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, contrastLowerPercentile, contrastUpperPercentile, sigma, thresh1, thresh2):
     smooth = np.copy(fftFiltered)
-    smooth = ExpandImageStack(smooth, sliceThickness, resolution)
+    # smooth = ExpandImageStack(smooth, sliceThickness, resolution)
+    # smooth = ResampleToIsotropic(smooth, sliceThickness, resolution)
 
     voids = []
     for i, img in enumerate(tqdm(smooth, desc='Applying Edge Detection Image Threshold')):
@@ -487,7 +518,7 @@ def EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, contrastL
         void = morphological_chan_vese(originalImg, 20, void)
         voids.append(void)
 
-    return np.array(voids)
+    return smooth, np.array(voids)
 
 #Algorithm to clean up the binary array containing pore locations. Removes small pores, fills gaps in pores, and performs a contour fit 
 def ThresholdCleaningMask(smooth, voids, imageStack = True):
@@ -685,40 +716,45 @@ def PrintPoreStatistics(numPores, poreRadii):
 def main():
     ########## IO Directories And Image Data ##########
 
-    #Unprocessed Image Stack Input Directories:
-    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Central"
+    # Unprocessed Image Stack Input Directories:
+    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Central/BSE_Shifted"
     inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_MidRadial/BSE"
-    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Periphery"
+    # inDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/Unprocessed/91T_Periphery/BSE_Shifted"
     
-    #FFT Filtered Image Stack Input Directories:
-    # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/FFTFiltered"
+    # FFT Filtered Image Stack Input Directories:
+    # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/BSE/FFTFiltered"
     fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE/FFTFiltered"
-    # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/FFTFiltered"
+    # fftInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/BSE/FFTFiltered"
 
-    #Binary Pore Mask Input Directories:
-    #Note: Must use unpadded directory! Padded directory is only used for mesh creation.
-    # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/BinaryStack"
+    # Unpadded Binary Pore Mask Input Directories:
+    # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/BSE/BinaryStack"
     binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE/BinaryStack"
-    # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/BinaryStack"
+    # binaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/BSE/BinaryStack"
 
-    #Base Output Directories:
-    # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central"
-    outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE"
-    # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery"
+    # Padded Binary Pore Mask Input Directories:
+    # paddedBinaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/BSE/PaddedBinaryStack"
+    paddedBinaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE/PaddedBinaryStack"
+    # paddedBinaryInDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/BSE/PaddedBinaryStack"
+
+    # Base Output Directories:
+    # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Central/BSE_Rescaled
+    outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_MidRadial/BSE_Rescaled"
+    # outDir = "C:/Users/Cade/Desktop/Research/PoreCharacterizationFiles/ProcessedPython/91T_Periphery/BSE_Rescaled"
 
     #Image Data:
-    resolution = 54.6 #nm/pixel
+    # resolution = 54.6 #nm/pixel
+    resolution = 125.67 #nm/pixel 
     sliceThickness = 100 #nm
     
 
 
-    # ########## Image Alignment And FFT Filtering ##########
+    ########## Image Alignment And FFT Filtering ##########
 
     # images = ReadImages(inDir, ".tif")
 
-    # rotated = StackRotate(images, tiltAngle=-3.2)
+    # rotated = StackRotate(images, tiltAngleCW=-8.1)
 
-    # shifted = StackVerticalShift(rotated, shift=0.3497942386831276) #Enter + value for shift if shift margin is known
+    # shifted = StackVerticalShift(rotated, shift=0.5795454545454546) #Enter + value for shift if shift margin is known
 
     # cropped = StackCropping(shifted)
 
@@ -726,9 +762,11 @@ def main():
 
     # fftFiltered = FFT_Filtering(filtered)
 
+    # SaveImages(fftFiltered, "FFTFiltered", outDir)
 
 
-    # ########## Image Thresholding ##########
+
+    ########## Image Thresholding ##########
     
     # fftFiltered = ReadImages(fftInDir, ".tif")
 
@@ -736,27 +774,29 @@ def main():
     # batchSize = round(len(fftFiltered)*testBatchSize)
     # fftFiltered = np.copy(fftFiltered[:batchSize])
 
-    # voids = EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, 0.01, 0.99, 2.0, 50, 100)
+    # smooth, voids = EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, 0.01, 0.99, 2.0, 50, 100)
 
-    # #Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
-    # # SaveImages(voids, 'BinaryStack', outDir)
-    # # SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
+    # Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
+    # SaveImages(voids, 'BinaryStack', outDir)
+    # SaveImages(voids.astype(np.uint8)*255, 'BinaryStack', outDir)
 
     # paddedVoids = PadVoids(voids)
     
-    # #Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
-    # # SaveImages(paddedVoids, 'BinaryStackPadded', outDir)
-    # # SaveImages(paddedVoids.astype(np.uint8)*255, 'BinaryStackPadded', outDir)
+    # Note first command will save the images as binary images of values 1 and 0, whereas the second function will save the images as binary images of values 255 and 0
+    # SaveImages(paddedVoids, 'BinaryStackPadded', outDir)
+    # SaveImages(paddedVoids.astype(np.uint8)*255, 'PaddedBinaryStack', outDir)
 
 
 
-    # ########## Mesh Generation (Pore Reconstruction) ##########
+    ########## Mesh Generation (Pore Reconstruction) ##########
+    
+    # paddedVoids = ReadImages(paddedBinaryInDir, '.tif', convertToBinary=True)
 
     # reconstruction = CreateMeshReconstruction(paddedVoids, 0.01, True)
 
-    # SaveMeshAsSTL(reconstruction, '91T_MidRadial_99%_Reduced', 'PoreReconstruction', outDir)
+    # SaveMeshAsSTL(reconstruction, '91T_MidRadial_PoreReconstruction_Iso', '3DMeshes', outDir)
 
-    # ########## Image Thresholding (Matrix Reconstruction) ##########
+    # ########## Mesh Generation (Matrix Reconstruction) ##########
 
     # binaryImages = ReadImages(binaryInDir, '.tif', convertToBinary=True)
 
@@ -766,11 +806,11 @@ def main():
 
     # invertedReconstruction = CreateMeshReconstruction(invertedBinary, 0.01)
 
-    # SaveMeshAsSTL(invertedReconstruction, '91T_MidRadial_Inverted', 'PoreReconstruction', outDir)
+    # SaveMeshAsSTL(invertedReconstruction, '91T_MidRadial_MatrixReconstruction_Iso', '3DMeshes', outDir)
 
 
 
-    # ########## Pore Feature Calculations ##########
+    ########## Pore Feature Calculations ##########
     
     # binaryImages = ReadImages(binaryInDir, '.tif', convertToBinary=True)
     
@@ -779,6 +819,83 @@ def main():
     # # PrintPoreStatistics(numPores, poreRadii)
 
     # print(np.sort(poreVolumes)[0:10])
+
+
+
+    ########## Thresholding Test Figures ##########
+    fftFiltered = ReadImages(fftInDir, ".tif")
+    
+    results = {}
+    timings = {}
+    overlayColor = [255, 0, 0]
+    microRes = resolution / 1000
+
+    # Method 1: Manual Thresholding
+    start = time.time()
+    smooth1, voids1 = Thresholding(fftFiltered, sliceThickness, resolution)
+    # voids1 = ThresholdCleaningMask(smooth1, voids1)
+    timings["Multi-Otsu"] = time.time() - start
+    results["Multi-Otsu"] = Imover(smooth1[125], voids1[125], overlayColor)
+
+    # Method 2: Alternative Manual Thresholding
+    start = time.time()
+    smooth2, voids2 = AltThresholding(fftFiltered, sliceThickness, resolution)
+    # voids2 = ThresholdCleaningMask(smooth2, voids2)
+    timings["Alt Multi-Otsu"] = time.time() - start
+    results["Alt Multi-Otsu"] = Imover(smooth2[125], voids2[125], overlayColor)
+
+    # Method 3: Sauvola Thresholding
+    start = time.time()
+    smooth3, voids3 = SauvolaThresholding(fftFiltered, sliceThickness, resolution, 0.01, 0.99, 2.0, 25)
+    voids3 = ThresholdCleaningMask(smooth3, voids3)
+    timings["Sauvola MorphACWE"] = time.time() - start
+    results["Sauvola MorphACWE"] = Imover(smooth3[125], voids3[125], overlayColor)
+
+    # Method 4: Edge Detection
+    start = time.time()
+    smooth4, voids4 = EdgeDetectionThresholding(fftFiltered, sliceThickness, resolution, 0.01, 0.99, 2.0, 50, 100)
+    timings["Edge Detection MorphACWE"] = time.time() - start
+    results["Edge Detection MorphACWE"] = Imover(smooth4[125], voids4[125], overlayColor)
+
+    # Plot the overlay images in a 2x2 grid
+    fig, axes = plt.subplots(2, 2, figsize=(12, 12))  # Increased vertical spacing
+    titles = list(results.keys())
+    images = list(results.values())
+
+    for ax, img, title in zip(axes.flat, images, titles):
+        ax.imshow(img)
+        ax.set_title(title, fontsize=16)
+        ax.axis('on')  # Show axes for labeling
+
+        # Set µm scale
+        ny, nx = img.shape[:2]
+        x_ticks = [0, nx // 4, nx // 2, nx * 3 // 4, nx]
+        y_ticks = [0, ny // 4, ny // 2, ny * 3 // 4, ny]
+
+        ax.set_xticks(x_ticks)
+        ax.set_yticks(y_ticks)
+
+        ax.set_xticklabels([f"{x * microRes:.0f}" for x in x_ticks])
+        ax.set_yticklabels([f"{(ny - y) * microRes:.0f}" for y in y_ticks])  # Flip y-axis labels only
+
+        ax.set_xlabel("μm")
+        ax.set_ylabel("μm")
+
+    fig.suptitle("Thresholding Method Binary Mask Comparison", fontsize=24)
+    # Layout adjustment
+    plt.subplots_adjust(
+        top=0.92,  # leave space for suptitle
+        bottom=0.08,  # add space at bottom
+        wspace=0.1,
+        hspace=0.4
+    )
+    plt.show()
+
+    plt.figure(figsize=(8, 6))
+    plt.bar(timings.keys(), timings.values(), color='skyblue')
+    plt.ylabel('Processing Time (seconds)')
+    plt.title('Thresholding Method Processing Time Comparison')
+    plt.show()
 
 if __name__ == "__main__":
     main()
