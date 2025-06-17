@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.stats
+import scipy.optimize
 from skimage import io
 from skimage.color import gray2rgb
 import matplotlib
@@ -14,6 +15,8 @@ from matplotlib.figure import Figure
 import os
 import csv
 import cv2
+import tqdm
+import seaborn as sns
 
 
 # TODO: Make it so that non-square grids can be used for full and rectangular crop (e.g., 8 strata turned into 4x2 grid)
@@ -139,38 +142,20 @@ class SetupWidget(QtWidgets.QWidget):
         # Step 3 widgets and layout
         self.step3Number = QtWidgets.QLabel("3")
         self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.selectAllocationText = QtWidgets.QLabel("Select Allocation Method:")
-        self.selectProportionalButton = QtWidgets.QPushButton("Proportional")
-        self.selectProportionalButton.setCheckable(True)
-        self.selectOptimalButton = QtWidgets.QPushButton("Optimal")
-        self.selectOptimalButton.setCheckable(True)
-
-        step3layout = QtWidgets.QHBoxLayout()
-        step3layout.addWidget(self.step3Number)
-        step3layout.addWidget(self.selectAllocationText,stretch=2)
-        step3layout.addWidget(self.selectProportionalButton,stretch=2)
-        step3layout.addWidget(self.selectOptimalButton,stretch=2)
-
-        self.step3Widget = QtWidgets.QWidget()
-        self.step3Widget.setLayout(step3layout)
-
-        # Step 4 widgets and layout
-        self.step4Number = QtWidgets.QLabel("4")
-        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
         self.setCItext = QtWidgets.QLabel("Set CI:")
         self.setCIbox = QtWidgets.QLineEdit("")
         self.setMOEtext = QtWidgets.QLabel("Set MOE:")
         self.setMOEbox = QtWidgets.QLineEdit("")
 
-        step4layout = QtWidgets.QHBoxLayout()
-        step4layout.addWidget(self.step4Number)
-        step4layout.addWidget(self.setCItext)
-        step4layout.addWidget(self.setCIbox)
-        step4layout.addWidget(self.setMOEtext)
-        step4layout.addWidget(self.setMOEbox)
+        step3layout = QtWidgets.QHBoxLayout()
+        step3layout.addWidget(self.step3Number)
+        step3layout.addWidget(self.setCItext)
+        step3layout.addWidget(self.setCIbox)
+        step3layout.addWidget(self.setMOEtext)
+        step3layout.addWidget(self.setMOEbox)
 
-        self.step4Widget = QtWidgets.QWidget()
-        self.step4Widget.setLayout(step4layout)
+        self.step3Widget = QtWidgets.QWidget()
+        self.step3Widget.setLayout(step3layout)
 
         # Begin measurement button
         self.beginMeasurementButton = QtWidgets.QPushButton("Begin Measurement")
@@ -181,19 +166,18 @@ class SetupWidget(QtWidgets.QWidget):
         # Previous results table
         self.previousResultsTable = QtWidgets.QTableWidget()
         self.previousResultsTable.setRowCount(1)
-        self.previousResultsTable.setColumnCount(5)
+        self.previousResultsTable.setColumnCount(4)
         self.previousResultsTable.setItem(0,0, QtWidgets.QTableWidgetItem("Image Name"))
-        self.previousResultsTable.setItem(0,1, QtWidgets.QTableWidgetItem("Allocation"))
-        self.previousResultsTable.setItem(0,2, QtWidgets.QTableWidgetItem("Area Fraction"))
-        self.previousResultsTable.setItem(0,3, QtWidgets.QTableWidgetItem("Confidence Interval"))
-        self.previousResultsTable.setItem(0,4, QtWidgets.QTableWidgetItem("Margin of Error"))
+        self.previousResultsTable.setItem(0,1, QtWidgets.QTableWidgetItem("Area Fraction"))
+        self.previousResultsTable.setItem(0,2, QtWidgets.QTableWidgetItem("Confidence Interval"))
+        self.previousResultsTable.setItem(0,3, QtWidgets.QTableWidgetItem("Margin of Error"))
         self.previousResultsTable.setStyleSheet("border: 1px solid black; gridline-color: gray")
         self.previousResultsTable.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.previousResultsTable.verticalHeader().setVisible(False)
         self.previousResultsTable.horizontalHeader().setVisible(False)
         font = QtGui.QFont("Arial", 12)
         font.setBold(True)
-        for i in range(5):
+        for i in range(4):
             self.previousResultsTable.item(0, i).setBackground(QtGui.QColor(196,217,244))
             self.previousResultsTable.item(0, i).setFont(font)
             self.previousResultsTable.item(0, i).setTextAlignment(QtCore.Qt.AlignCenter)
@@ -210,8 +194,6 @@ class SetupWidget(QtWidgets.QWidget):
         fullWidgetLayout.addWidget(empty, stretch=1)
         fullWidgetLayout.addWidget(self.step3Widget, stretch=1)
         fullWidgetLayout.addWidget(empty, stretch=1)
-        fullWidgetLayout.addWidget(self.step4Widget, stretch=1)
-        fullWidgetLayout.addWidget(empty, stretch=1)
         fullWidgetLayout.addWidget(self.beginMeasurementButton, stretch=1)
         fullWidgetLayout.addWidget(empty, stretch=1)
         fullWidgetLayout.addWidget(self.previousResultsTable)
@@ -226,22 +208,10 @@ class SetupWidget(QtWidgets.QWidget):
         self.selectRectCropButton.clicked.connect(self.RectangularCrop)
         self.selectCircCropButton.clicked.connect(self.CircularCrop)
         self.selectAnnularCropButton.clicked.connect(self.AnnularCrop)
-        self.selectOptimalButton.clicked.connect(self.SelectOptimal)
-        self.selectProportionalButton.clicked.connect(self.SelectProportional)
         self.beginMeasurementButton.clicked.connect(self.BeginMeasurement)
         self.setMOEbox.textChanged.connect(self.CheckMOEandCI)
         self.setCIbox.textChanged.connect(self.CheckMOEandCI)
         self.exportPreviousResultsButton.clicked.connect(self.WriteResultsToCsv)
-    
-    def SelectOptimal(self):
-        self.selectProportionalButton.setChecked(False)
-        self.selectOptimalButton.setChecked(True)
-        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
-        
-    def SelectProportional(self):
-        self.selectProportionalButton.setChecked(True)
-        self.selectOptimalButton.setChecked(False)
-        self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
 
     def SelectFullImage(self):
         self.selectFullImageButton.setChecked(True)
@@ -426,9 +396,8 @@ class SetupWidget(QtWidgets.QWidget):
         c1 = self.step1Number.palette().button().color().name()
         c2 = self.step2Number.palette().button().color().name()
         c3 = self.step3Number.palette().button().color().name()
-        c4 = self.step4Number.palette().button().color().name()
 
-        if c1 == "#90ee90" and c2 == "#90ee90" and c3 == "#90ee90" and c4 == "#90ee90":
+        if c1 == "#90ee90" and c2 == "#90ee90" and c3 == "#90ee90":
             self.parentTab.MoveToInitialGuessWidget()
         else:
             msg = QtWidgets.QMessageBox()
@@ -470,17 +439,9 @@ class SetupWidget(QtWidgets.QWidget):
             ci = ci.split("%")[0]
             ci = float(ci)
 
-            self.step4Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
+            self.step3Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
         except:
-            self.step4Number.setStyleSheet("border: 3px solid black; font: bold 24px")
-
-    def GetAllocationStrategy(self):
-        if self.selectOptimalButton.isChecked():
-            return "Optimal"
-        elif self.selectProportionalButton.isChecked():
-            return "Proportional"
-        else:
-            return None
+            self.step3Number.setStyleSheet("border: 3px solid black; font: bold 24px")
 
     def GetConfidence(self):
         ci = self.setCIbox.text()
@@ -508,10 +469,9 @@ class SetupWidget(QtWidgets.QWidget):
         self.previousResultsTable.insertRow(rowPosition)
         
         self.previousResultsTable.setItem(rowPosition,0, QtWidgets.QTableWidgetItem(f"{os.path.basename(self.imagePathBox.text())}"))
-        self.previousResultsTable.setItem(rowPosition,1, QtWidgets.QTableWidgetItem(self.GetAllocationStrategy()))
-        self.previousResultsTable.setItem(rowPosition,2, QtWidgets.QTableWidgetItem(f"{100*p_st:.2f}%"))
-        self.previousResultsTable.setItem(rowPosition,3, QtWidgets.QTableWidgetItem(f"{int(self.GetConfidence()*100)}% CI: ({100*lowerCL:.1f}%, {100*upperCL:.1f}%)"))
-        self.previousResultsTable.setItem(rowPosition,4, QtWidgets.QTableWidgetItem(f"{100*(upperCL-lowerCL)/2:.2f}%"))
+        self.previousResultsTable.setItem(rowPosition,1, QtWidgets.QTableWidgetItem(f"{100*p_st:.2f}%"))
+        self.previousResultsTable.setItem(rowPosition,2, QtWidgets.QTableWidgetItem(f"{int(self.GetConfidence()*100)}% CI: ({100*lowerCL:.1f}%, {100*upperCL:.1f}%)"))
+        self.previousResultsTable.setItem(rowPosition,3, QtWidgets.QTableWidgetItem(f"{100*(upperCL-lowerCL)/2:.2f}%"))
 
     def Clear(self):
         # Reset step 1 text
@@ -521,8 +481,6 @@ class SetupWidget(QtWidgets.QWidget):
         self.step1Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
         self.step2Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
         self.step3Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        self.step4Number.setStyleSheet("border: 3px solid black; border-radius: 40px; font: bold 24px")
-        
 
         # Reset step 2 buttons
         self.selectFullImageButton.setChecked(False)
@@ -537,11 +495,7 @@ class SetupWidget(QtWidgets.QWidget):
 
         self.countAreaBounds = None
 
-        # Reset step 3 buttons
-        self.selectOptimalButton.setChecked(False)
-        self.selectProportionalButton.setChecked(False)
-
-        # Reset step 4 text
+        # Reset step 3 text
         self.setMOEbox.setText("")
         self.setCIbox.setText("")
 
@@ -557,7 +511,7 @@ class SetupWidget(QtWidgets.QWidget):
                 writer = csv.writer(file)
                 for i in range(startRow, self.previousResultsTable.rowCount()):
                     rowToWrite = []
-                    for j in range(5):
+                    for j in range(4):
                         rowToWrite.append(self.previousResultsTable.item(i, j).text())
                     
                     writer.writerow(rowToWrite)
@@ -816,7 +770,8 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         self.e_moe = 0.01
         self.d = 0.9
 
-    def InitializeCounting(self, initialGuesses, imagePath, allocationStrategy, countAreaBounds, countAreaType, confidence, MOE):
+    # TODO: Implement countAreaBounds and type for different geometries
+    def InitializeCounting(self, initialGuesses, imagePath, countAreaBounds, countAreaType, confidence, MOE):
 
         self.numStrata_N = int(np.sqrt(len(initialGuesses)))
         self.imageName = imagePath
@@ -825,6 +780,8 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         self.N = self.myMap.numPixels
         self.N_h = int(self.N / self.numStrata_N**2)
         self.confidence = confidence
+        
+        W_h = self.N_h / self.N
 
         # ############################################################################ #
         # Calculate the total number of samples needed to acheieve specified precision #
@@ -839,78 +796,29 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
             MOE = (initialStrataProportion + MOE) / 2
             print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
         
-        upperCL = 1.0
-        lowerCL = 0.0
-        withinTolerance = False
-        currentIter = 0
-        maxIters = 1000
-        currentIter = 0
-        n = self.numStrata_N ** 2
-        iterExponent = 1
-        d = 0.5 * 0.75**(iterExponent-1) + 1
-        while not withinTolerance and currentIter < maxIters:
-            n = int(np.ceil(n))
-
-            lowerCL, upperCL = scipy.stats.binom.interval(confidence, n, initialStrataProportion)
-            lowerCL /= n
-            upperCL /= n
-
-            if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
-                n *= d
-            else: # Eq. 15 satisfied
-                pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
-                if pctDiff > self.e_moe: # overestimating how many sample points needed
-                    n /= d
-                    iterExponent += 1
-                    d = 2 * 0.75**(iterExponent-1) + 1
-                else:
-                    withinTolerance = True
-            currentIter += 1
+        p_st = np.sum(W_h * initialGuesses)
+        q_st = 1 - p_st
         
-        if currentIter == maxIters:
-            raise(RuntimeError("Max Iterations reached"))
+        z = scipy.stats.norm.ppf(confidence)
 
-        # ###################################################### #
-        # Allocate the total number of samples across the strata #
-        # ###################################################### #
+        neff_func = lambda x: MOE - ((scipy.stats.binom.interval(0.95, x, p_st)[1]/x - scipy.stats.binom.interval(0.95, x, p_st)[0]/x) / 2)
 
-        def OptimalAllocation(n):
-            W_h = 1/self.numStrata_N**2
-            
-            optRatio = (W_h * (np.sum(np.sqrt(initialGuesses * (1-initialGuesses))))**2) / (np.sum(initialGuesses * (1-initialGuesses)))
-            n *= optRatio
+        # NOTE: scipy CP interval reports expected number of successes
+        # NOTE: scipy fsolve does not work for this, using alternative lookup table method
+        testVals = np.arange(1,10000)
+        return_vals = neff_func(testVals)
 
-            strataVars = np.empty(self.numStrata_N**2)
-            cnt = 0
-            for i in range(self.numStrata_N):
-                topBound = int(i*self.myMap.rows/self.numStrata_N)
-                bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
-                for j in range(self.numStrata_N):
-                    leftBound = int(j*self.myMap.cols/self.numStrata_N)
-                    rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
-                    strataVars[cnt] = np.var(self.myMap.originalImage[topBound:bottomBound,leftBound:rightBound])
-                    cnt += 1
+        neff = testVals[np.argmin(np.abs(return_vals))]
+        neff = np.ceil(neff/ self.numStrata_N**2) * self.numStrata_N**2
 
-            n_h = np.empty(self.numStrata_N**2)
+        self.neff = neff
 
-            n_h = np.ceil(n * self.N_h * strataVars / np.sum(self.N_h * strataVars)).astype(int)
-
-            # Ensure that at least one point sampled per strata
-            n_h = np.maximum(n_h, 1)
-
-            return n_h
-
-        def ProportionalAllocation(n):
-            n_h = np.ones(self.numStrata_N**2) * (n/self.numStrata_N**2)
-
-            n_h = np.ceil(n_h).astype(int)
-
-            return n_h
-
-        if allocationStrategy == "Optimal":
-            n_h = OptimalAllocation(n)
-        else:
-            n_h = ProportionalAllocation(n)
+        nh_func = lambda x: neff - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+        
+        n_h = scipy.optimize.fsolve(nh_func, np.array([2]))[0]
+        
+        n_h = np.ceil(n_h)
+        n_h = np.ones(self.numStrata_N**2, dtype=np.int16) * int(n_h)
 
         self.n_h = n_h
 
@@ -918,8 +826,6 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         # Get pixel sample locations #
         # ########################## #
 
-
-        # TODO: Use count area type and bounds to determine the sampled region
         pixels = []
         cnt = 0
         for i in range(self.numStrata_N):
@@ -955,25 +861,6 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         self.UpdateDisplay()
 
         self.setFocus(QtCore.Qt.NoFocusReason) # Needed or the keyboard will not work
-
-    def TwoSidedCL_A(self, n, p, confidence):
-        sum = 0
-        A_U = 0
-        while sum <= confidence + (1-confidence)/2: # The addition term is used because confidence includes AUC of upper and lower bound.
-            A_U += 1
-            sum = 0
-            for i in range(A_U):
-                sum += scipy.stats.binom.pmf(i, n, p)
-
-        sum = 1.0
-        A_L = 0
-        while sum > confidence + (1-confidence)/2: # The addition term is used because confidence includes AUC of upper and lower bound.
-            A_L += 1
-            sum = 0
-            for i in range(A_L, n+1):
-                sum += scipy.stats.binom.pmf(i, n, p)
-        
-        return A_L-1, A_U-1
 
     def ZoomOut(self):
         if self.numSurroundingPixels < 300:
@@ -1067,14 +954,13 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
                 else:
                     bounds = [np.cumsum(self.n_h[:i])[-1], np.cumsum(self.n_h[:i])[-1] + n]
                 p_h.append(np.average(self.poreData[bounds[0]:bounds[1]]))
+            
+            W_h = self.N_h / self.N
 
-            p_st = np.sum(p_h) * self.N_h / self.N
-
-            p_h = np.array(p_h)
-
-            lowerCL, upperCL = scipy.stats.binom.interval(self.confidence, np.sum(self.n_h), p_st)
-            lowerCL /= np.sum(self.n_h)
-            upperCL /= np.sum(self.n_h)
+            p_st = np.sum(p_h) * W_h
+            lowerCL, upperCL = scipy.stats.binom.interval(self.confidence, self.neff, p_st) # NOTE: Scipy interval returns number of successes
+            lowerCL /= self.neff
+            upperCL /= self.neff
 
             
             self.parentTab.MoveToSetupWidget(p_st, lowerCL, upperCL)
@@ -1175,29 +1061,323 @@ class MyWindow(QMainWindow):
         # value will be none, array of length 3 (circ crop), or array of length 4 (rect or annular crop)
         countAreaBounds = self.setupWidget.countAreaBounds
 
-        allocationStrategy = self.setupWidget.GetAllocationStrategy()
         initialGuesses = np.array(self.initalGuessWidget.initialGuesses)
         confidence = self.setupWidget.GetConfidence()
         moe = self.setupWidget.GetMOE()
         imagePath = self.setupWidget.imagePathBox.text()
 
         # Initialize widget
-        self.constituentCountingWidget.InitializeCounting(initialGuesses, imagePath, allocationStrategy, countAreaType, countAreaBounds, confidence, moe)
+        self.constituentCountingWidget.InitializeCounting(initialGuesses, imagePath, countAreaType, countAreaBounds, confidence, moe)
 
         # Change active widget
         self.stackedWidget.setCurrentIndex(2)
 
 
+# 10000 samples of 5 images of 40 different parameters
+def AnalyzeCIWidthAndCoverage():
+    plt.rcParams["font.family"] = "serif"
+    plt.rcParams["font.serif"] = ["Times New Roman"]
+    plt.rcParams["font.size"] = 12
+
+    dir = "TestCases"
+    files = os.listdir(dir)
+    files.sort()
+
+    numStrata_N = 4
+    MOE = 0.01
+    confidence = 0.95
+    numSamples = 10000 # FIXME: Change to 10000 for final run
+    numImages = 5
+
+    guessValues = np.array([0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95])
+
+    designEffectHeatmapWilson = np.zeros((40,numImages), dtype=np.float32)
+    coverageHeatmapWilson = np.zeros((40,numImages), dtype=np.float32)
+    widthHeatmapWilson = np.zeros((40,numImages), dtype=np.float32)
+
+    designEffectHeatmapAC = np.zeros((40,numImages), dtype=np.float32)
+    coverageHeatmapAC = np.zeros((40,numImages), dtype=np.float32)
+    widthHeatmapAC = np.zeros((40,numImages), dtype=np.float32)
+
+    designEffectHeatmapCP = np.zeros((40,numImages), dtype=np.float32)
+    coverageHeatmapCP = np.zeros((40,numImages), dtype=np.float32)
+    widthHeatmapCP = np.zeros((40,numImages), dtype=np.float32)
+
+    keyValues = []
+    with open("key.csv", "r") as keyFile:
+        reader = csv.reader(keyFile)
+        for line in reader:
+            temp = [line[0], line[1], line[2], line[3], line[4]]
+            keyValues.append(temp)
+    
+    startIndex = 100000
+    for i in tqdm.tqdm(range(40)):
+        for j in tqdm.tqdm(range(numImages),leave=False):
+            coverageSuccessesWilson = 0
+            widthsWilson = []
+            coverageSuccessesAC = 0
+            widthsAC = []
+            coverageSuccessesCP = 0
+            widthsCP = []
+
+            originalImage = io.imread(os.path.join(dir,f"{startIndex+j}.png"), as_gray=True)
+            myMap = PixelMap(originalImage)
+
+            N = myMap.numPixels
+            N_h = int(N / numStrata_N**2)
+            W_h = N_h/N
+
+            initialGuesses = []
+
+            for i2 in range(numStrata_N):
+                topBound = int(i2 * myMap.rows / numStrata_N)
+                bottomBound = int((i2+1) * myMap.rows/numStrata_N)
+                for j2 in range(numStrata_N):
+                    leftBound = int(j2 * myMap.cols / numStrata_N)
+                    rightBound = int((j2+1) * myMap.cols / numStrata_N)
+
+                    selectedArea = myMap.originalImage[leftBound:rightBound+1, topBound:bottomBound+1]
+
+                    numPorePixels = np.sum(np.where(selectedArea != 255, 1, 0))
+
+                    porosity = numPorePixels / ((rightBound - leftBound) * (bottomBound - topBound))
+
+                    closestGuess = guessValues[np.argmin(np.abs(porosity - guessValues))]
+
+                    initialGuesses.append(closestGuess)
+            
+            initialGuesses = np.array(initialGuesses)
+            p_st = np.sum(W_h * initialGuesses)
+            q_st = 1 - p_st
+    
+            z = scipy.stats.norm.ppf(confidence)
+            
+            neff_func_Wilson = lambda x: MOE - (z * np.sqrt(x) / ((x+z**2)) * (p_st * (1-p_st) + (z**2 / (4*x)))**0.5)
+            neff_func_AC = lambda x: MOE - (z * np.sqrt((p_st * (1-p_st)) / (x + z**2)))
+            neff_func_CP = lambda x: MOE - ((scipy.stats.binom.interval(0.95, x, p_st)[1]/x - scipy.stats.binom.interval(0.95, x, p_st)[0]/x) / 2)
+
+            # NOTE: neff values are rounded to ensure equal allocation is possible
+            neff_Wilson = scipy.optimize.fsolve(neff_func_Wilson, np.array([numStrata_N**2]))[0]
+            neff_Wilson = np.ceil(neff_Wilson / numStrata_N**2) * numStrata_N**2
+            neff_AC = scipy.optimize.fsolve(neff_func_AC, np.array([numStrata_N**2]))[0]
+            neff_AC = np.ceil(neff_AC / numStrata_N**2) * numStrata_N**2
+            # NOTE: scipy CP interval reports expected number of successes
+            # NOTE: scipy fsolve does not work for this, using alternative lookup table method
+            testVals = np.arange(1,10000)
+            CP_return_vals = neff_func_CP(testVals)
+            neff_CP = testVals[np.argmin(np.abs(CP_return_vals))]
+            neff_CP = np.ceil(neff_CP/ numStrata_N**2) * numStrata_N**2
+
+            nh_func_Wilson = lambda x: neff_Wilson - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_AC  = lambda x: neff_AC - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_CP = lambda x: neff_CP - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            
+            n_h_Wilson = scipy.optimize.fsolve(nh_func_Wilson, np.array([2]))[0]
+            n_h_AC = scipy.optimize.fsolve(nh_func_AC, np.array([2]))[0]
+            n_h_CP = scipy.optimize.fsolve(nh_func_CP, np.array([2]))[0]
+            
+            n_h_Wilson = np.ceil(n_h_Wilson)
+            n_h_Wilson = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_Wilson)
+            n_h_AC = np.ceil(n_h_AC)
+            n_h_AC = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_AC)
+            n_h_CP = np.ceil(n_h_CP)
+            n_h_CP = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_CP)
+
+            designEffectHeatmapWilson[i][j] = np.sum(n_h_Wilson) / neff_Wilson
+            designEffectHeatmapAC[i][j] = np.sum(n_h_AC) / neff_AC
+            designEffectHeatmapCP[i][j] = np.sum(n_h_CP) / neff_CP
+
+            # ########################## #
+            # Get pixel sample locations #
+            # ########################## #
+            
+            for l in tqdm.tqdm(range(numSamples), leave=False):
+                
+                ##########
+                # Wilson #
+                ##########
+
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_Wilson[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                x = neff_Wilson * p_st
+                lowerCL = ((x + z**2/2)/(neff_Wilson+z**2)) - (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+                upperCL = ((x + z**2/2)/(neff_Wilson+z**2)) + (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+
+                if float(keyValues[10000*i + j][2])/100 < upperCL and float(keyValues[10000*i + j][2])/100 > lowerCL:
+                    coverageSuccessesWilson += 1
+                
+                widthsWilson.append((upperCL-lowerCL)/2)
+
+                ##########
+                #   AC   #
+                ##########
+
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_AC[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                x = neff_AC * p_st
+                lowerCL = ((x + z**2/2)/(neff_AC+z**2)) - (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
+                upperCL = ((x + z**2/2)/(neff_AC+z**2)) + (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
+
+                if float(keyValues[10000*i + j][2])/100 < upperCL and float(keyValues[10000*i + j][2])/100 > lowerCL:
+                    coverageSuccessesAC += 1
+                
+                widthsAC.append((upperCL-lowerCL)/2)
+
+
+                ##########
+                #   CP   #
+                ##########
+
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_CP[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                lowerCL, upperCL = scipy.stats.binom.interval(confidence, neff_CP, p_st) # NOTE: Scipy interval returns number of successes
+                lowerCL /= neff_CP
+                upperCL /= neff_CP
+
+                if float(keyValues[10000*i + j][2])/100 < upperCL and float(keyValues[10000*i + j][2])/100 > lowerCL:
+                    coverageSuccessesCP += 1
+                
+                widthsCP.append((upperCL-lowerCL)/2)
+                
+            coverageHeatmapWilson[i][j] = 100 * coverageSuccessesWilson / numSamples
+            widthHeatmapWilson[i][j] = 100 * np.average(widthsWilson)
+
+            coverageHeatmapAC[i][j] = 100 * coverageSuccessesAC / numSamples
+            widthHeatmapAC[i][j] = 100 * np.average(widthsAC)
+
+            coverageHeatmapCP[i][j] = 100 * coverageSuccessesCP / numSamples
+            widthHeatmapCP[i][j] = 100 * np.average(widthsCP)
+        
+        startIndex += 10000
+
+    with open("Sim1output1MOE.csv", "w") as csvFile:
+        writer = csv.writer(csvFile)
+        writer.writerows(coverageHeatmapWilson)
+        writer.writerows(widthHeatmapWilson)
+        writer.writerows(coverageHeatmapAC)
+        writer.writerows(widthHeatmapAC)
+        writer.writerows(coverageHeatmapCP)
+        writer.writerows(widthHeatmapCP)
+
+    ax = sns.heatmap(coverageHeatmapWilson,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=95, xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(widthHeatmapWilson,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=int(MOE*100), xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(coverageHeatmapAC,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=95, xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(widthHeatmapAC,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=int(MOE*100), xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(coverageHeatmapCP,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=95, xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(widthHeatmapCP,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=int(MOE*100), xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
 def AutoAnalyzeSimImages():
     dir = "TestCases"
     files = os.listdir(dir)
     files.sort()
-    numStrata_N = 3
+
+    numStrata_N = 4
     MOE = 0.01
     confidence = 0.95
-    e_moe = 0.01
 
     guessValues = np.array([0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95])
+
+    useWilson = True
+    useAC = True
+    useCP = True
 
     keyValues = []
     with open("key.csv", "r") as keyFile:
@@ -1206,14 +1386,15 @@ def AutoAnalyzeSimImages():
             temp = [line[0], line[1], line[2], line[3], line[4]]
             keyValues.append(temp)
 
-    with open("SimOutput_1MOE_3x3.csv", 'a', newline='') as csvFile:
+    with open(f"SimOutput_{int(confidence*100)}CI_{int(MOE*100)}MOE_{numStrata_N}x{numStrata_N}.csv", 'a', newline='') as csvFile:
         writer = csv.writer(csvFile)
-        for fileCount, file in enumerate(files):
-            originalImage = io.imread(os.path.join(dir,file), as_gray=True)
+        for iternum in tqdm.tqdm(range(len((files)))):
+            originalImage = io.imread(os.path.join(dir,files[iternum]), as_gray=True)
             myMap = PixelMap(originalImage)
 
             N = myMap.numPixels
             N_h = int(N / numStrata_N**2)
+            W_h = N_h/N
 
             initialGuesses = []
 
@@ -1235,237 +1416,168 @@ def AutoAnalyzeSimImages():
                     initialGuesses.append(closestGuess)
             
             initialGuesses = np.array(initialGuesses)
+            p_st = np.sum(W_h * initialGuesses)
+            q_st = 1 - p_st
+            z = scipy.stats.norm.ppf(confidence)
             
-            initialStrataProportion = np.sum(initialGuesses) * N_h / N
+            neff_func_Wilson = lambda x: MOE - (z * np.sqrt(x) / ((x+z**2)) * (p_st * (1-p_st) + (z**2 / (4*x)))**0.5)
+            neff_func_AC = lambda x: MOE - (z * np.sqrt((p_st * (1-p_st)) / (x + z**2)))
+            neff_func_CP = lambda x: MOE - ((scipy.stats.binom.interval(0.95, x, p_st)[1]/x - scipy.stats.binom.interval(0.95, x, p_st)[0]/x) / 2)
+
+            # NOTE: neff values are rounded to ensure equal allocation is possible
+            neff_Wilson = scipy.optimize.fsolve(neff_func_Wilson, np.array([numStrata_N**2]))[0]
+            neff_Wilson = np.ceil(neff_Wilson / numStrata_N**2) * numStrata_N**2
+            neff_AC = scipy.optimize.fsolve(neff_func_AC, np.array([numStrata_N**2]))[0]
+            neff_AC = np.ceil(neff_AC / numStrata_N**2) * numStrata_N**2
+            # NOTE: scipy CP interval reports expected number of successes
+            # NOTE: scipy fsolve does not work for this, using alternative lookup table method
+            testVals = np.arange(1,10000)
+            CP_return_vals = neff_func_CP(testVals)
+            neff_CP = testVals[np.argmin(np.abs(CP_return_vals))]
+            neff_CP = np.ceil(neff_CP/ numStrata_N**2) * numStrata_N**2
+
+            nh_func_Wilson = lambda x: neff_Wilson - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_AC  = lambda x: neff_AC - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_CP = lambda x: neff_CP - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
             
-            if initialStrataProportion > 0.5 and MOE > 1-initialStrataProportion:
-                MOE = ((1-initialStrataProportion)+MOE) / 2 # want to keep +- MOE as close as possible on the open side. so if p=0.01, with 5% MOE, the CI should be (0,0.06)
-                print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
-            elif initialStrataProportion < 0.5 and MOE > initialStrataProportion:
-                MOE = (initialStrataProportion + MOE) / 2
-                print(f"MOE stretches beyond range of [0,1] based on initial guess, reducing to {initialStrataProportion:.2f}")
+            n_h_Wilson = scipy.optimize.fsolve(nh_func_Wilson, np.array([2]))[0]
+            n_h_AC = scipy.optimize.fsolve(nh_func_AC, np.array([2]))[0]
+            n_h_CP = scipy.optimize.fsolve(nh_func_CP, np.array([2]))[0]
             
-            upperCL = 1.0
-            lowerCL = 0.0
-            withinTolerance = False
-            currentIter = 0
-            maxIters = 1000
-            currentIter = 0
-            n = numStrata_N ** 2
-            exponent = 1
-            d = 0.5 * 0.75**(exponent-1) + 1
-            lastGuess = -1
-            while not withinTolerance and currentIter < maxIters:
-                n = int(np.ceil(n))
-                if n == lastGuess:
-                    break
-                lastGuess = n
+            n_h_Wilson = np.ceil(n_h_Wilson)
+            n_h_Wilson = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_Wilson)
+            n_h_AC = np.ceil(n_h_AC)
+            n_h_AC = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_AC)
+            n_h_CP = np.ceil(n_h_CP)
+            n_h_CP = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_CP)
 
-                lowerCL, upperCL = scipy.stats.binom.interval(confidence, n, initialStrataProportion)
-                lowerCL /= n
-                upperCL /= n
-
-                if ((upperCL - lowerCL) / 2) > MOE: # Eq.15 not satisfied
-                    n *= d
-                else: # Eq. 15 satisfied
-                    pctDiff = abs((((upperCL - lowerCL) / 2) - MOE) / MOE)
-                    if pctDiff > e_moe: # overestimating how many sample points needed
-                        n /= d
-                        exponent += 1
-                        d = 0.5 * 0.75**(exponent-1) + 1
-                    else:
-                        withinTolerance = True
-                currentIter += 1
+            csvRow = keyValues[iternum]
             
-            if currentIter == maxIters:
-                raise(RuntimeError("Max Iterations reached"))
-
-            # ###################################################### #
-            # Allocate the total number of samples across the strata #
-            # ###################################################### #
-
-            def OptimalAllocation(n):
-                W_h = 1 / numStrata_N**2
-                
-                optRatio = (W_h * (np.sum(np.sqrt(initialGuesses * (1-initialGuesses))))**2) / (np.sum(initialGuesses * (1-initialGuesses)))
-                n *= optRatio
-
-                strataVars = np.empty(numStrata_N**2)
-                cnt = 0
-                for i in range(numStrata_N):
-                    topBound = int(i * myMap.rows/numStrata_N)
-                    bottomBound = int((i+1)*myMap.rows/numStrata_N)
-                    for j in range(numStrata_N):
-                        leftBound = int(j*myMap.cols/numStrata_N)
-                        rightBound = int((j+1)*myMap.cols/numStrata_N)
-                        strataVars[cnt] = np.var(myMap.originalImage[topBound:bottomBound,leftBound:rightBound])
-                        cnt += 1
-
-                n_h = np.empty(numStrata_N**2)
-
-                n_h = np.ceil(n * N_h * strataVars / np.sum(N_h * strataVars)).astype(int)
-
-                # Ensure that at least one point sampled per strata
-                n_h = np.maximum(n_h, 1)
-
-                return n_h
-
-            def ProportionalAllocation(n):
-                n_h = np.ones(numStrata_N**2) * (n/numStrata_N**2)
-
-                n_h = np.ceil(n_h).astype(int)
-
-                return n_h
-
-            n_h_opt = OptimalAllocation(n)
-
-            n_h_prop = ProportionalAllocation(n)
-
             # ########################## #
             # Get pixel sample locations #
             # ########################## #
-
-            csvRow = keyValues[fileCount]
-
-            csvRow.append(f"{np.sum(n_h_opt) / np.sum(n_h_prop):.4f}")
-
-            # ########################## #
-            #   Optimal allocation       #
-            # ########################## #
-
-            p_h_opt = []
-            cnt = 0
-            for i in range(numStrata_N):
-                topBound = int(i*myMap.rows/numStrata_N)
-                bottomBound = int((i+1)*myMap.rows/numStrata_N)
-                for j in range(numStrata_N):
-                    leftBound = int(j*myMap.cols/numStrata_N)
-                    rightBound = int((j+1)*myMap.cols/numStrata_N)
-
-                    random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_opt[cnt], replace=False)
-                    random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
-                    random[0,:] += topBound
-                    random[1,:] += leftBound
             
-                    pixels = list(zip(random[0,:], random[1,:]))
-                    p_h = 0
-                    for pixel in pixels:
-                        if myMap.originalImage[pixel] != 255:
-                            p_h += 1
-                    
-                    p_h_opt.append(p_h / len(pixels))
+            ##########
+            # Wilson #
+            ##########
 
-                    cnt += 1
+            if useWilson:
 
-            p_st_opt = np.sum(p_h_opt) * N_h / N
-            p_h_opt = np.array(p_h_opt)
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
 
-            lowerCL, upperCL = scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_opt) # Use n_h_prop to keep consistent MOE size
-            lowerCL /= np.sum(n_h_prop)
-            upperCL /= np.sum(n_h_prop)
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_Wilson[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
 
-            csvRow.append(np.sum(n_h_opt))
-            csvRow.append(f"{p_st_opt*100:.3f}")
-            csvRow.append(f"{lowerCL*100:.3f}")
-            csvRow.append(f"{upperCL*100:.3f}")
-            csvRow.append(f"{((upperCL-lowerCL)/2)*100:.3f}")
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
 
-            # ########################## #
-            #  Proportional allocation 1 #
-            # ########################## #
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                x = neff_Wilson * p_st
+                lowerCL = ((x + z**2/2)/(neff_Wilson+z**2)) - (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+                upperCL = ((x + z**2/2)/(neff_Wilson+z**2)) + (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+
+                csvRow.extend([p_st,lowerCL,upperCL])
             
-            p_h_prop = []
-            cnt = 0
-            for i in range(numStrata_N):
-                topBound = int(i*myMap.rows/numStrata_N)
-                bottomBound = int((i+1)*myMap.rows/numStrata_N)
-                for j in range(numStrata_N):
-                    leftBound = int(j*myMap.cols/numStrata_N)
-                    rightBound = int((j+1)*myMap.cols/numStrata_N)
+            ##########
+            #   AC   #
+            ##########
 
-                    random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_prop[cnt], replace=False)
-                    random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
-                    random[0,:] += topBound
-                    random[1,:] += leftBound
+            if useAC:
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
 
-                    pixels = list(zip(random[0,:], random[1,:]))
-                    p_h = 0
-                    for pixel in pixels:
-                        if myMap.originalImage[pixel] != 255:
-                            p_h += 1
-                    
-                    p_h_prop.append(p_h / len(pixels))
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_AC[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
 
-                    cnt += 1
-            
-            p_st_prop = np.sum(p_h_prop) * N_h / N
-            p_h_prop = np.array(p_h_prop)
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
 
-            scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
-            lowerCL, upperCL = scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
-            lowerCL /= np.sum(n_h_prop)
-            upperCL /= np.sum(n_h_prop)
+                        cnt += 1
+                
+                p_h = np.array(p_h)
 
-            csvRow.append(np.sum(n_h_prop))
-            csvRow.append(f"{p_st_prop*100:.3f}")
-            csvRow.append(f"{lowerCL*100:.3f}")
-            csvRow.append(f"{upperCL*100:.3f}")
-            csvRow.append(f"{((upperCL-lowerCL)/2)*100:.3f}")
+                p_st = np.sum(p_h * W_h)
+                x = neff_AC * p_st
+                lowerCL = ((x + z**2/2)/(neff_AC+z**2)) - (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
+                upperCL = ((x + z**2/2)/(neff_AC+z**2)) + (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
 
-            # ########################## #
-            #  Proportional allocation 2 #
-            # ########################## #
+                csvRow.extend([p_st,lowerCL,upperCL])
 
-            # # uses n_h_opt instead of n_prop to see if opt actually improves
-            # new_prop_n_h = ProportionalAllocation(np.sum(n_h_opt))
-            # p_h_prop = []
-            # cnt = 0
-            # for i in range(numStrata_N):
-            #     topBound = int(i*myMap.rows/numStrata_N)
-            #     bottomBound = int((i+1)*myMap.rows/numStrata_N)
-            #     for j in range(numStrata_N):
-            #         leftBound = int(j*myMap.cols/numStrata_N)
-            #         rightBound = int((j+1)*myMap.cols/numStrata_N)
 
-            #         random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), new_prop_n_h[cnt], replace=False)
-            #         random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
-            #         random[0,:] += topBound
-            #         random[1,:] += leftBound
+            ##########
+            #   CP   #
+            ##########
 
-            #         pixels = list(zip(random[0,:], random[1,:]))
-            #         p_h = 0
-            #         for pixel in pixels:
-            #             if myMap.originalImage[pixel] != 255:
-            #                 p_h += 1
-                    
-            #         p_h_prop.append(p_h / len(pixels))
+            if useCP:
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
 
-            #         cnt += 1
-            
-            # p_st_prop = np.sum(p_h_prop) * N_h / N
-            # p_h_prop = np.array(p_h_prop)
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_CP[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
 
-            # scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
-            # lowerCL, upperCL = scipy.stats.binom.interval(confidence, np.sum(n_h_prop), p_st_prop)
-            # lowerCL /= np.sum(n_h_prop)
-            # upperCL /= np.sum(n_h_prop)
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
 
-            # csvRow.append(np.sum(new_prop_n_h))
-            # csvRow.append(f"{p_st_prop*100:.3f}")
-            # csvRow.append(f"{lowerCL*100:.3f}")
-            # csvRow.append(f"{upperCL*100:.3f}")
-            # csvRow.append(f"{((upperCL-lowerCL)/2)*100:.3f}")
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+                p_st = np.sum(p_h * W_h)
+                lowerCL, upperCL = scipy.stats.binom.interval(confidence, neff_CP, p_st) # NOTE: Scipy interval returns number of successes
+                lowerCL /= neff_CP
+                upperCL /= neff_CP
+
+                csvRow.extend([p_st,lowerCL,upperCL])
 
             writer.writerow(csvRow)
             csvFile.flush()
 
-            # print()
-            # print(f"Proportional ({np.sum(n_h_prop)} samples):")
-            # print(f"{p_st_prop*100:.3f}, ({lowerCL*100:.3f}, {upperCL*100:.3f})")
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    scipy.stats.binom.interval(0.95, 100, 10)
     app.setStyle("Fusion")
 
     win = MyWindow()
@@ -1475,4 +1587,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # AnalyzeCIWidthAndCoverage()
     # AutoAnalyzeSimImages()
