@@ -4,11 +4,9 @@ import scipy.optimize
 from skimage import io
 from skimage.color import gray2rgb
 import matplotlib
-import matplotlib.pyplot as plt
 import matplotlib.path
 matplotlib.use("Qt5Agg")
 from PyQt5 import QtWidgets, QtGui, QtCore
-from PyQt5.QtWidgets import QApplication, QMainWindow
 import sys
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -990,7 +988,7 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         self.UpdateDisplay()
 
 
-class MyWindow(QMainWindow):
+class MyWindow(QtWidgets.QMainWindow):
 
     def __init__(self):
         super(MyWindow,self).__init__()
