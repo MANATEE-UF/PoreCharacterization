@@ -1,8 +1,37 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import scipy
+import scipy.stats
 import csv
 from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
+import pandas
+import time
+import seaborn as sns
+import os
+import tqdm
+from skimage import io
+
+def CompareTimes():
+    start = time.time()
+    n = 200
+    p = 0.5
+    for i in range(100000):
+        binom = scipy.stats.binomtest(100, n, p)
+        ci = binom.proportion_ci(0.95, method="wilson")
+        lowerCL = ci.low
+        upperCL = ci.high
+        moe = upperCL - lowerCL
+    print(time.time()-start)
+
+    start = time.time()
+    z = scipy.stats.norm.ppf(0.95)
+    for i in range(100000):
+        moe = (z * np.sqrt(n) / ((n+z**2)) * (p * (1-p) + (z**2 / (4*n)))**0.5)
+    print(time.time()-start)
+
+    for i in range(100000):
+        lowerCL, upperCL = scipy.stats.binom.interval(0.95, n, p)
+        moe = upperCL - lowerCL
+    print(time.time()-start)
 
 
 def PlotSamplesPerInitialGuess():
@@ -415,130 +444,809 @@ def PlotSimSuccesses2():
 
     plt.show()
 
-def PlotSimResults():
+def PlotSimResultsStrata():
+    # First row: MOE for all 40 groups for two allocation methods for three MOEs (scatter)
+    # Second row: Percent of successes for all 40 groups for two allocation methods for three MOEs (scatter)
+    # Third row: Cost savings ratio for all 40 groups for three MOEs (violin)
+    numGroups = 40
+
     plt.rcParams["font.family"] = "serif"
     plt.rc("axes", labelsize=14)
     plt.rc("xtick", labelsize=14)
     plt.rc("ytick", labelsize=14)
 
-    porosityDict = {"5%":0, "12.5%":1, "25%":2, "37.5%":3, "50%":4}
-    sizeDict = {"Small":0, "Medium":1, "Large":2, "Mixed":3}
-    distributionDict = {"Random":0, "Clustered":1}
-
-    countsPorosity = {"Optimal":[0,0,0,0,0],"Proportional":[0,0,0,0,0]}
-    countsSize = {"Optimal":[0,0,0,0],"Proportional":[0,0,0,0]}
-    countsDistribution = {"Optimal":[0,0],"Proportional":[0,0]}
-
-    ratioPorosity = [[], [], [], [], []]
-    ratioSize = [[], [], [], []]
-    ratioDistribution = [[], []]
-
-    with open('key.csv', mode='r') as file:
-        csv_reader = csv.reader(file)
-        
-        # Iterate over each row in the CSV file
-        cnt = 0
-        for row in csv_reader:
-            if cnt==0:
-                cnt +=1
-                continue
-
-            porosityIdx = porosityDict[row[1] + "%"]
-            sizeIdx = sizeDict[row[3]]
-            distIdx = distributionDict[row[4]]
-
-            ratioPorosity[porosityIdx].append(float(row[5]) / float(row[9]))
-            ratioDistribution[distIdx].append(float(row[5]) / float(row[9]))
-            ratioSize[sizeIdx].append(float(row[5]) / float(row[9]))
-
-            if float(row[7]) < float(row[2]) and float(row[2]) < float(row[8]):
-                countsPorosity["Optimal"][porosityIdx] += 1
-                countsSize["Optimal"][sizeIdx] += 1
-                countsDistribution["Optimal"][distIdx] += 1
-
-            if float(row[11]) < float(row[2]) and float(row[2]) < float(row[12]):
-                countsPorosity["Proportional"][porosityIdx] += 1
-                countsSize["Proportional"][sizeIdx] += 1
-                countsDistribution["Proportional"][distIdx] += 1
-
-    fig, ax = plt.subplots(2,3,layout='constrained')
-
-    x = np.arange(5)  # the label locations
-    width = 0.43  # the width of the bars
-    multiplier = 0
-
-    hatches = [None, "//"]
-
-    for attribute, measurement in countsPorosity.items():
-        offset = width * multiplier
-
-        rects = ax[0][0].bar(x + offset, 100*np.array(measurement)/160, width,label=attribute, edgecolor="k",hatch=hatches[multiplier])
-        ax[0][0].bar_label(rects, padding=2, fmt=lambda x: f'{x:.1f}')
-
-        multiplier += 1
+    MOEs = {"Optimal 3x3" : np.zeros(numGroups),
+            "Proportional 3x3": np.zeros(numGroups),
+            "Optimal 4x4": np.zeros(numGroups),
+            "Proportional 4x4": np.zeros(numGroups),
+            "Optimal 5x5": np.zeros(numGroups),
+            "Proportional 5x5": np.zeros(numGroups)}
     
-    ax[0][0].set_xticks(x + width/2, list(porosityDict.keys()))
-
-    x = np.arange(4)  # the label locations
-    width = 0.4  # the width of the bars
-    multiplier = 0
-
-    for attribute, measurement in countsSize.items():
-        offset = width * multiplier
-
-        rects = ax[0][1].bar(x + offset, 100*np.array(measurement)/200, width, label=attribute, edgecolor="k", hatch=hatches[multiplier])
-        ax[0][1].bar_label(rects, padding=2, fmt=lambda x: f'{x:.1f}')
-
-        multiplier += 1
+    successes = {"Optimal 3x3" : np.zeros(numGroups),
+            "Proportional 3x3": np.zeros(numGroups),
+            "Optimal 4x4": np.zeros(numGroups),
+            "Proportional 4x4": np.zeros(numGroups),
+            "Optimal 5x5": np.zeros(numGroups),
+            "Proportional 5x5": np.zeros(numGroups)}
     
-    ax[0][1].set_xticks(x + width/2, list(sizeDict.keys()))
-
-    x = np.arange(2)  # the label locations
-    width = 0.4  # the width of the bars
-    multiplier = 0
-
-    for attribute, measurement in countsDistribution.items():
-        offset = width * multiplier
-
-        rects = ax[0][2].bar(x + offset, 100*np.array(measurement)/400, width, label=attribute, edgecolor="k", hatch=hatches[multiplier])
-        ax[0][2].bar_label(rects, padding=2, fmt=lambda x: f'{x:.1f}')
-
-        multiplier += 1
-
-    # Add some text for labels, title and custom x-axis tick labels, etc.
-    ax[0][0].set_ylabel('Measurements Within MOE (%)')
-
-    ax[0][0].set_xlabel("Porosity")
-    ax[0][1].set_xlabel("Pore Sizes")
-    ax[0][2].set_xlabel("Pore Distribution")
-
-    ax[0][2].set_xticks(x + width/2, list(distributionDict.keys()))
-    ax[0][2].legend(bbox_to_anchor=(1.01,0.5))
+    successesStd = {"Optimal 3x3" : np.zeros(numGroups),
+            "Proportional 3x3": np.zeros(numGroups),
+            "Optimal 4x4": np.zeros(numGroups),
+            "Proportional 4x4": np.zeros(numGroups),
+            "Optimal 5x5": np.zeros(numGroups),
+            "Proportional 5x5": np.zeros(numGroups)}
     
-    ax[0][0].set_ylim(0, 107)
-    ax[0][1].set_ylim(0, 107)
-    ax[0][2].set_ylim(0, 107)
+    costSavingsRatio = {"3x3" : np.zeros(numGroups),
+                        "4x4" : np.zeros(numGroups),
+                        "5x5" : np.zeros(numGroups)}
 
-    ax[1][0].violinplot(ratioPorosity)
-    ax[1][0].set_xticks([y + 1 for y in range(len(ratioPorosity))],
-                  labels=['5%', '12.5%', '25%', '37.5%', '50%'])
-    ax[1][1].violinplot(ratioSize)
-    ax[1][1].set_xticks([y + 1 for y in range(len(ratioSize))],
-                  labels=['Small', 'Medium', 'Large', 'Mixed'])
-    ax[1][2].violinplot(ratioDistribution)
-    ax[1][2].set_xticks([y + 1 for y in range(len(ratioDistribution))],
-                  labels=['Random', 'Clustered'])
 
-    # Add some text for labels, title and custom x-axis tick labels, etc.
-    ax[1][0].set_ylabel('Sampling Cost Savings Ratio')
-    ax[1][0].set_xlabel("Porosity")
-    ax[1][1].set_xlabel("Pore Sizes")
-    ax[1][2].set_xlabel("Pore Distribution")
+    df_3x3 = pandas.read_csv("SimOutput_5MOE_3x3.csv", header=None)
+    df_4x4 = pandas.read_csv("SimOutput_5MOE_4x4.csv", header=None)
+    df_5x5 = pandas.read_csv("SimOutput_5MOE_5x5.csv", header=None)
+
+    groupings = np.arange(0,410000,10000)
+    numSamples = 10000
+    for i in range(numGroups):
+        MOEs["Optimal 3x3"][i] = np.average(df_3x3.iloc[groupings[i]:groupings[i+1], 10])
+        MOEs["Optimal 4x4"][i] = np.average(df_4x4.iloc[groupings[i]:groupings[i+1], 10])
+        MOEs["Optimal 5x5"][i] = np.average(df_5x5.iloc[groupings[i]:groupings[i+1], 10])
+        MOEs["Proportional 3x3"][i] = np.average(df_3x3.iloc[groupings[i]:groupings[i+1], 15])
+        MOEs["Proportional 4x4"][i] = np.average(df_4x4.iloc[groupings[i]:groupings[i+1], 15])
+        MOEs["Proportional 5x5"][i] = np.average(df_5x5.iloc[groupings[i]:groupings[i+1], 15])
+
+        successes["Optimal 3x3"][i] = 100 * np.average(np.logical_and(np.array(df_3x3.iloc[groupings[i]:groupings[i+1], 2] < df_3x3.iloc[groupings[i]:groupings[i+1], 9]), np.array(df_3x3.iloc[groupings[i]:groupings[i+1], 2] > df_3x3.iloc[groupings[i]:groupings[i+1], 8])))
+        successes["Optimal 4x4"][i] = 100 * np.average(np.logical_and(np.array(df_4x4.iloc[groupings[i]:groupings[i+1], 2] < df_4x4.iloc[groupings[i]:groupings[i+1], 9]), np.array(df_4x4.iloc[groupings[i]:groupings[i+1], 2] > df_4x4.iloc[groupings[i]:groupings[i+1], 8])))
+        successes["Optimal 5x5"][i] = 100 * np.average(np.logical_and(np.array(df_5x5.iloc[groupings[i]:groupings[i+1], 2] < df_5x5.iloc[groupings[i]:groupings[i+1], 9]), np.array(df_5x5.iloc[groupings[i]:groupings[i+1], 2] > df_5x5.iloc[groupings[i]:groupings[i+1], 8])))
+        successes["Proportional 3x3"][i] = 100 * np.average(np.logical_and(np.array(df_3x3.iloc[groupings[i]:groupings[i+1], 2] < df_3x3.iloc[groupings[i]:groupings[i+1], 14]), np.array(df_3x3.iloc[groupings[i]:groupings[i+1], 2] > df_3x3.iloc[groupings[i]:groupings[i+1], 13])))
+        successes["Proportional 4x4"][i] = 100 * np.average(np.logical_and(np.array(df_4x4.iloc[groupings[i]:groupings[i+1], 2] < df_4x4.iloc[groupings[i]:groupings[i+1], 14]), np.array(df_4x4.iloc[groupings[i]:groupings[i+1], 2] > df_4x4.iloc[groupings[i]:groupings[i+1], 13])))
+        successes["Proportional 5x5"][i] = 100 * np.average(np.logical_and(np.array(df_5x5.iloc[groupings[i]:groupings[i+1], 2] < df_5x5.iloc[groupings[i]:groupings[i+1], 14]), np.array(df_5x5.iloc[groupings[i]:groupings[i+1], 2] > df_5x5.iloc[groupings[i]:groupings[i+1], 13])))
+        # successes["Red. Proportional 1% MOE"][i] = 100 * np.average(np.logical_and(np.array(df_1MOE.iloc[groupings[i]:groupings[i+1], 2] < df_1MOE.iloc[groupings[i]:groupings[i+1], 19]), np.array(df_1MOE.iloc[groupings[i]:groupings[i+1], 2] > df_1MOE.iloc[groupings[i]:groupings[i+1], 18])))
+        # successes["Red. Proportional 3% MOE"][i] = 100 * np.average(np.logical_and(np.array(df_3MOE.iloc[groupings[i]:groupings[i+1], 2] < df_3MOE.iloc[groupings[i]:groupings[i+1], 19]), np.array(df_3MOE.iloc[groupings[i]:groupings[i+1], 2] > df_3MOE.iloc[groupings[i]:groupings[i+1], 18])))
+        # successes["Red. Proportional 5% MOE"][i] = 100 * np.average(np.logical_and(np.array(df_5MOE.iloc[groupings[i]:groupings[i+1], 2] < df_5MOE.iloc[groupings[i]:groupings[i+1], 19]), np.array(df_5MOE.iloc[groupings[i]:groupings[i+1], 2] > df_5MOE.iloc[groupings[i]:groupings[i+1], 18])))
+
+        successesStd["Optimal 3x3"][i] = 100 * np.sqrt(successes["Optimal 3x3"][i]/100 * (1 - successes["Optimal 3x3"][i]/100)) / np.sqrt(numSamples)
+        successesStd["Optimal 4x4"][i] = 100 * np.sqrt(successes["Optimal 4x4"][i]/100 * (1 - successes["Optimal 4x4"][i]/100)) / np.sqrt(numSamples)
+        successesStd["Optimal 5x5"][i] = 100 * np.sqrt(successes["Optimal 5x5"][i]/100 * (1 - successes["Optimal 5x5"][i]/100)) / np.sqrt(numSamples)
+        successesStd["Proportional 3x3"][i] = 100 * np.sqrt(successes["Proportional 3x3"][i]/100 * (1 - successes["Proportional 3x3"][i]/100)) / np.sqrt(numSamples)
+        successesStd["Proportional 4x4"][i] = 100 * np.sqrt(successes["Proportional 4x4"][i]/100 * (1 - successes["Proportional 4x4"][i]/100)) / np.sqrt(numSamples)
+        successesStd["Proportional 5x5"][i] = 100 * np.sqrt(successes["Proportional 5x5"][i]/100 * (1 - successes["Proportional 5x5"][i]/100)) / np.sqrt(numSamples)
+        # successesStd["Red. Proportional 1% MOE"][i] = 100 * np.sqrt(successes["Red. Proportional 1% MOE"][i]/100 * (1 - successes["Red. Proportional 1% MOE"][i]/100)) / np.sqrt(numSamples)
+        # successesStd["Red. Proportional 3% MOE"][i] = 100 * np.sqrt(successes["Red. Proportional 3% MOE"][i]/100 * (1 - successes["Red. Proportional 3% MOE"][i]/100)) / np.sqrt(numSamples)
+        # successesStd["Red. Proportional 5% MOE"][i] = 100 * np.sqrt(successes["Red. Proportional 5% MOE"][i]/100 * (1 - successes["Red. Proportional 5% MOE"][i]/100)) / np.sqrt(numSamples)
+
+        costSavingsRatio["3x3"][i] = np.average(df_3x3.iloc[groupings[i]:groupings[i+1], 5])
+        costSavingsRatio["4x4"][i] = np.average(df_4x4.iloc[groupings[i]:groupings[i+1], 5])
+        costSavingsRatio["5x5"][i] = np.average(df_5x5.iloc[groupings[i]:groupings[i+1], 5])
+
+    # hatchings = [None, "||||", "////", None, "||||", "////", None, "||||", "////"]
+    # colors = ["tab:blue", "tab:orange", "tab:green", "tab:blue", "tab:orange", "tab:green", "tab:blue", "tab:orange", "tab:green"]
+    # markers = ["o", "o", "o", "^", "^", "^", "X", "X", "X"]
+    # cnt = 0
+    # for attribute, measurement in successes.items():
+    #     if "Red." not in attribute:
+    #         plt.errorbar(np.arange(2,numGroups+2), measurement, yerr=successesStd[attribute], c=colors[cnt])
+    #         plt.plot(np.arange(2,numGroups+2), measurement,c=colors[cnt])
+    #         plt.scatter(np.arange(2,numGroups+2), measurement, label=attribute, edgecolor="k", c=colors[cnt], marker=markers[cnt], hatch=hatchings[cnt],s=110)
+    #     cnt += 1
+
+    # plt.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc='lower left',
+    #                   ncols=3, mode="expand", borderaxespad=0.)
+    # plt.plot((-5,numGroups+5), (95,95), color="tab:gray", linestyle="dashed", alpha=0.5)
+    # plt.xlim(1.5, 20.5)
+    # plt.ylim(88,100)
+    # plt.ylabel("Success Rate (%)")
+    # plt.minorticks_on()
+    # plt.show()
+
+    fig, axs = plt.subplots(2,layout='constrained',sharex=True)
+
+    # hatchings = [None, "||||", None, "||||", None, "||||"]
+    # colors = ["tab:blue", "tab:orange", "tab:blue", "tab:orange", "tab:blue", "tab:orange"]
+    # markers = ["o", "o", "^", "^", "X", "X"]
     
-    ax[1][0].set_ylim(0.85, 1.1)
-    ax[1][1].set_ylim(0.85, 1.1)
-    ax[1][2].set_ylim(0.85, 1.1)
+    # cnt = 0
+    # for attribute, measurement in MOEs.items():
+    #     axs[0].scatter(np.arange(numGroups), measurement, label=attribute, edgecolor="k", c=colors[cnt], marker=markers[cnt], hatch=hatchings[cnt],s=125)
+    #     cnt += 1
+    # axs[0].plot((-5,numGroups+5), (5,5), color="tab:gray", linestyle="dashed", alpha=0.5)
+    # axs[0].plot((-5,numGroups+5), (3,3), color="tab:gray", linestyle="dashed", alpha=0.5)
+    # axs[0].plot((-5,numGroups+5), (1,1), color="tab:gray", linestyle="dashed", alpha=0.5)
+    # axs[0].legend(bbox_to_anchor=(0., 1.02, 1., .102), loc='lower left',
+    #                   ncols=3, mode="expand", borderaxespad=0.)
+    # axs[0].set_xlim(-0.5,numGroups + 0.5)
+    # axs[0].set_ylabel("MOE (%)")
+    # axs[0].set_yticks(np.arange(6))
+    # axs[0].minorticks_on()
+    
+    hatchings = [None, "||||", None, "||||", None, "||||"]
+    colors = ["tab:blue", "tab:orange", "tab:blue", "tab:orange", "tab:blue", "tab:orange"]
+    markers = ["o", "o", "^", "^", "X", "X"]
+    cnt = 0
+    for attribute, measurement in successes.items():
+        axs[0].scatter(np.arange(numGroups), measurement, label=attribute, edgecolor="k", c=colors[cnt], marker=markers[cnt], hatch=hatchings[cnt],s=110)
+        # axs[1].errorbar(np.arange(numGroups), measurement, yerr=successesStd[attribute], c=colors[cnt])
+        cnt += 1
+    axs[0].legend(bbox_to_anchor=(0., 1.02, 1., .102), loc='lower left',
+                      ncols=3, mode="expand", borderaxespad=0.)
+    axs[0].plot((-5,numGroups+5), (95,95), color="tab:gray", linestyle="dashed", alpha=0.5)
+    axs[0].set_xlim(-0.5,numGroups + 0.5)
+    axs[0].set_ylim(92,100.5)
+    axs[0].set_ylabel("Success Rate (%)")
+    axs[0].minorticks_on()
 
+    colors = ["tab:blue", "tab:orange", "tab:green"]
+    markers = ["o", "^", "X"]
+    cnt=0
+    for attribute, measurement in costSavingsRatio.items():
+        axs[1].scatter(np.arange(numGroups), measurement, label=attribute, edgecolor="k", c=colors[cnt], marker=markers[cnt], s=125)
+        cnt += 1
+    axs[1].legend(bbox_to_anchor=(0., 1.02, 1., .102), loc='lower left',
+                      ncols=3, mode="expand", borderaxespad=0.)
+    axs[1].set_xlim(-0.5,numGroups + 0.5)
+    axs[1].set_ylabel("Cost Savings Ratio")
+    axs[1].set_xlabel("Image Parameter Group Number")
+
+    plt.minorticks_on()
     plt.show()
 
+def PlotSimResults():
+    # First row: MOE for all 40 groups for two allocation methods for three MOEs (scatter)
+    # Second row: Percent of successes for all 40 groups for two allocation methods for three MOEs (scatter)
+    # Third row: Residual (violin)
+    numGroups = 40
+    numSamples = 10000
+
+    plt.rcParams["font.family"] = "serif"
+    plt.rc("axes", labelsize=14)
+    plt.rc("xtick", labelsize=14)
+    plt.rc("ytick", labelsize=14)
+
+    MOEs = {"1% MOE": np.zeros(numGroups),
+            "3% MOE" : np.zeros(numGroups),
+            "5% MOE": np.zeros(numGroups)}
+    
+    successes = {"1% MOE": np.zeros(numGroups),
+            "3% MOE" : np.zeros(numGroups),
+            "5% MOE": np.zeros(numGroups)}
+    
+    residuals = {"1% MOE": np.zeros((numGroups,numSamples)),
+            "3% MOE" : np.zeros((numGroups,numSamples)),
+            "5% MOE": np.zeros((numGroups,numSamples))}
+
+    df_1MOE = pandas.read_csv("SimOutput_95CI_1MOE_4x4.csv", header=None)
+    df_3MOE = pandas.read_csv("SimOutput_95CI_3MOE_4x4.csv", header=None)
+    df_5MOE = pandas.read_csv("SimOutput_95CI_5MOE_4x4.csv", header=None)
+
+    groupings = np.arange(0,410000,10000)
+    for i in range(numGroups):
+        # compare 11,12,13 to 2
+        MOEs["1% MOE"][i] = 100 * np.average((df_1MOE.iloc[groupings[i]:groupings[i+1], 13] - df_1MOE.iloc[groupings[i]:groupings[i+1], 12]) / 2)
+        MOEs["3% MOE"][i] = 100 * np.average((df_3MOE.iloc[groupings[i]:groupings[i+1], 13] - df_3MOE.iloc[groupings[i]:groupings[i+1], 12]) / 2)
+        MOEs["5% MOE"][i] = 100 * np.average((df_5MOE.iloc[groupings[i]:groupings[i+1], 13] - df_5MOE.iloc[groupings[i]:groupings[i+1], 12]) / 2)
+
+        successes["1% MOE"][i] = 100 * np.average(np.logical_and(np.array(df_1MOE.iloc[groupings[i]:groupings[i+1], 2]/100 < df_1MOE.iloc[groupings[i]:groupings[i+1], 13]), np.array(df_1MOE.iloc[groupings[i]:groupings[i+1], 2]/100 > df_1MOE.iloc[groupings[i]:groupings[i+1], 12])))
+        successes["3% MOE"][i] = 100 * np.average(np.logical_and(np.array(df_3MOE.iloc[groupings[i]:groupings[i+1], 2]/100 < df_3MOE.iloc[groupings[i]:groupings[i+1], 13]), np.array(df_3MOE.iloc[groupings[i]:groupings[i+1], 2]/100 > df_3MOE.iloc[groupings[i]:groupings[i+1], 12])))
+        successes["5% MOE"][i] = 100 * np.average(np.logical_and(np.array(df_5MOE.iloc[groupings[i]:groupings[i+1], 2]/100 < df_5MOE.iloc[groupings[i]:groupings[i+1], 13]), np.array(df_5MOE.iloc[groupings[i]:groupings[i+1], 2]/100 > df_5MOE.iloc[groupings[i]:groupings[i+1], 12])))
+
+        residuals["1% MOE"][i] = 100 * (df_1MOE.iloc[groupings[i]:groupings[i+1], 11] - df_1MOE.iloc[groupings[i]:groupings[i+1], 2]/100)
+        residuals["3% MOE"][i] = 100 * (df_3MOE.iloc[groupings[i]:groupings[i+1], 11] - df_3MOE.iloc[groupings[i]:groupings[i+1], 2]/100)
+        residuals["5% MOE"][i] = 100 * (df_5MOE.iloc[groupings[i]:groupings[i+1], 11] - df_5MOE.iloc[groupings[i]:groupings[i+1], 2]/100)
+
+    fig, axs = plt.subplots(3,layout='constrained',sharex=True)
+    fig.set_size_inches(13, 8)
+
+    colors = ["tab:blue", "tab:orange", "tab:green"]
+    markers = ["o", "^", "X"]
+    
+    cnt = 0
+    for attribute, measurement in MOEs.items():
+        axs[0].scatter(np.arange(numGroups), measurement, label=attribute, edgecolor="k", c=colors[cnt], marker=markers[cnt],s=125)
+        cnt += 1
+    axs[0].plot((-5,numGroups+5), (5,5), color="tab:gray", linestyle="dashed", alpha=0.5)
+    axs[0].plot((-5,numGroups+5), (3,3), color="tab:gray", linestyle="dashed", alpha=0.5)
+    axs[0].plot((-5,numGroups+5), (1,1), color="tab:gray", linestyle="dashed", alpha=0.5)
+    axs[0].legend(bbox_to_anchor=(0., 1.02, 1., .102), loc='lower left',
+                      ncols=3, mode="expand", borderaxespad=0.)
+    axs[0].set_xlim(-0.5,numGroups + 0.5)
+    axs[0].set_ylabel("MOE (%)")
+    axs[0].set_yticks(np.arange(6))
+    axs[0].minorticks_on()
+    
+    colors = ["tab:blue", "tab:orange", "tab:green"]
+    markers = ["o", "^", "X"]
+    cnt = 0
+    for attribute, measurement in successes.items():
+        axs[1].scatter(np.arange(numGroups), measurement, label=attribute, edgecolor="k", c=colors[cnt], marker=markers[cnt], s=110)
+        cnt += 1
+    axs[1].legend(bbox_to_anchor=(0., 1.02, 1., .102), loc='lower left',
+                      ncols=3, mode="expand", borderaxespad=0.)
+    axs[1].plot((-5,numGroups+5), (95,95), color="tab:gray", linestyle="dashed", alpha=0.5)
+    axs[1].set_xlim(-0.5,numGroups + 0.5)
+    axs[1].set_ylim(92,100.5)
+    axs[1].set_ylabel("Success Rate (%)")
+    axs[1].minorticks_on()
+    data = [residuals["1% MOE"][i,:] for i in range(residuals["1% MOE"].shape[0])]
+
+    parts = axs[2].violinplot(data, np.arange(40), showmeans=True)
+    
+    for pc in parts['bodies']:
+        pc.set_facecolor("tab:green")
+        pc.set_edgecolor("black")
+        pc.set_alpha(0.7)
+    
+    for partname in ['cbars','cmins','cmaxes', 'cmeans']:
+        parts[partname].set_edgecolor('black')
+        parts[partname].set_linewidth(1)
+    
+    axs[2].plot((-5,numGroups+5), (0,0), color="tab:gray", linestyle="dashed", alpha=0.5)
+    axs[2].set_xticks(np.arange(40))
+    axs[2].set_xlim(-0.5,numGroups - 0.5)
+    axs[2].set_ylabel("Residual (%)")
+    axs[2].set_xlabel("Image Parameter Group Number")
+
+    plt.minorticks_on()
+    plt.savefig("myplot.png", dpi = 300)
+    # plt.show()
+
+class PixelMap:
+    def __init__(self,image:np.ndarray):
+        self.rows = len(image)
+        self.cols = len(image[0])
+        self.numPixels = self.rows * self.cols
+        self.originalImage = image # grayscale
+
+        if np.max(image) <= 1.0:
+            self.originalImage *= 255
+            self.originalImage = self.originalImage.astype(int)
+
+    # Overlay a grid onto the original image and return centered around that grid
+    def GetImageWithGridOverlay(self, pixelRow:int, pixelCol:int, newColor:tuple, numSurroundingPixels:int, style:int) -> np.ndarray: 
+        # Center
+        displayImage = gray2rgb(self.originalImage)
+
+        if style == 0:
+            displayImage[pixelRow][pixelCol] = newColor
+
+        minValue = 1 if style != 2 else 2
+        
+        # above
+        maxVal = 3 if pixelRow > 2 else pixelRow
+        for i in range(minValue, maxVal):
+            displayImage[pixelRow-i][pixelCol] = newColor
+
+        # below
+        maxVal = 3 if pixelRow < self.rows-3 else self.rows-pixelRow
+        for i in range(minValue, maxVal):
+            displayImage[pixelRow+i][pixelCol] = newColor
+
+        # right
+        maxVal = 3 if pixelCol < self.cols-3 else self.cols-pixelCol
+        for i in range(minValue, maxVal):
+            displayImage[pixelRow][pixelCol+i] = newColor
+
+        # left
+        maxVal = 3 if pixelCol > 2 else pixelCol
+        for i in range(minValue, maxVal):
+            displayImage[pixelRow][pixelCol-i] = newColor
+        
+        # pad image to ensure display proper
+        displayImage = np.pad(displayImage, ((numSurroundingPixels+1, numSurroundingPixels+1), (numSurroundingPixels+1, numSurroundingPixels+1), (0,0)))
+
+        # Crop the image to center around the grid with numSurroundingPixels around
+        displayImage = displayImage[pixelRow:pixelRow+2*numSurroundingPixels,pixelCol:pixelCol+2*numSurroundingPixels,:]
+
+        return displayImage
+
+    def GetCroppedImage(self, leftBound, rightBound, topBound, bottomBound):
+        return self.originalImage[topBound:bottomBound, leftBound:rightBound]
+    
+    def GetCroppedAndMaskedImage(self, leftBound, rightBound, topBound, bottomBound, polygonPoints):
+        return self.originalImage[topBound:bottomBound, leftBound:rightBound]
+
+# 10000 samples of 5 images of 40 different parameters
+def AnalyzeCIWidthAndCoverage():
+    plt.rcParams["font.family"] = "serif"
+    plt.rcParams["font.serif"] = ["Times New Roman"]
+    plt.rcParams["font.size"] = 12
+
+    dir = "TestCases"
+    files = os.listdir(dir)
+    files.sort()
+
+    numStrata_N = 4
+    MOE = 0.01
+    confidence = 0.95
+    numSamples = 10000 # FIXME: Change to 10000 for final run
+    numImages = 5
+
+    guessValues = np.array([0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95])
+
+    designEffectHeatmapWilson = np.zeros((40,numImages), dtype=np.float32)
+    coverageHeatmapWilson = np.zeros((40,numImages), dtype=np.float32)
+    widthHeatmapWilson = np.zeros((40,numImages), dtype=np.float32)
+
+    designEffectHeatmapAC = np.zeros((40,numImages), dtype=np.float32)
+    coverageHeatmapAC = np.zeros((40,numImages), dtype=np.float32)
+    widthHeatmapAC = np.zeros((40,numImages), dtype=np.float32)
+
+    designEffectHeatmapCP = np.zeros((40,numImages), dtype=np.float32)
+    coverageHeatmapCP = np.zeros((40,numImages), dtype=np.float32)
+    widthHeatmapCP = np.zeros((40,numImages), dtype=np.float32)
+
+    keyValues = []
+    with open("key.csv", "r") as keyFile:
+        reader = csv.reader(keyFile)
+        for line in reader:
+            temp = [line[0], line[1], line[2], line[3], line[4]]
+            keyValues.append(temp)
+    
+    startIndex = 100000
+    for i in tqdm.tqdm(range(40)):
+        for j in tqdm.tqdm(range(numImages),leave=False):
+            coverageSuccessesWilson = 0
+            widthsWilson = []
+            coverageSuccessesAC = 0
+            widthsAC = []
+            coverageSuccessesCP = 0
+            widthsCP = []
+
+            originalImage = io.imread(os.path.join(dir,f"{startIndex+j}.png"), as_gray=True)
+            myMap = PixelMap(originalImage)
+
+            N = myMap.numPixels
+            N_h = int(N / numStrata_N**2)
+            W_h = N_h/N
+
+            initialGuesses = []
+
+            for i2 in range(numStrata_N):
+                topBound = int(i2 * myMap.rows / numStrata_N)
+                bottomBound = int((i2+1) * myMap.rows/numStrata_N)
+                for j2 in range(numStrata_N):
+                    leftBound = int(j2 * myMap.cols / numStrata_N)
+                    rightBound = int((j2+1) * myMap.cols / numStrata_N)
+
+                    selectedArea = myMap.originalImage[leftBound:rightBound+1, topBound:bottomBound+1]
+
+                    numPorePixels = np.sum(np.where(selectedArea != 255, 1, 0))
+
+                    porosity = numPorePixels / ((rightBound - leftBound) * (bottomBound - topBound))
+
+                    closestGuess = guessValues[np.argmin(np.abs(porosity - guessValues))]
+
+                    initialGuesses.append(closestGuess)
+            
+            initialGuesses = np.array(initialGuesses)
+            p_st = np.sum(W_h * initialGuesses)
+            q_st = 1 - p_st
+    
+            z = scipy.stats.norm.ppf(confidence)
+            
+            neff_func_Wilson = lambda x: MOE - (z * np.sqrt(x) / ((x+z**2)) * (p_st * (1-p_st) + (z**2 / (4*x)))**0.5)
+            neff_func_AC = lambda x: MOE - (z * np.sqrt((p_st * (1-p_st)) / (x + z**2)))
+            neff_func_CP = lambda x: MOE - ((scipy.stats.binom.interval(0.95, x, p_st)[1]/x - scipy.stats.binom.interval(0.95, x, p_st)[0]/x) / 2)
+
+            # NOTE: neff values are rounded to ensure equal allocation is possible
+            neff_Wilson = scipy.optimize.fsolve(neff_func_Wilson, np.array([numStrata_N**2]))[0]
+            neff_Wilson = np.ceil(neff_Wilson / numStrata_N**2) * numStrata_N**2
+            neff_AC = scipy.optimize.fsolve(neff_func_AC, np.array([numStrata_N**2]))[0]
+            neff_AC = np.ceil(neff_AC / numStrata_N**2) * numStrata_N**2
+            # NOTE: scipy CP interval reports expected number of successes
+            # NOTE: scipy fsolve does not work for this, using alternative lookup table method
+            testVals = np.arange(1,10000)
+            CP_return_vals = neff_func_CP(testVals)
+            neff_CP = testVals[np.argmin(np.abs(CP_return_vals))]
+            neff_CP = np.ceil(neff_CP/ numStrata_N**2) * numStrata_N**2
+
+            nh_func_Wilson = lambda x: neff_Wilson - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_AC  = lambda x: neff_AC - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_CP = lambda x: neff_CP - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            
+            n_h_Wilson = scipy.optimize.fsolve(nh_func_Wilson, np.array([2]))[0]
+            n_h_AC = scipy.optimize.fsolve(nh_func_AC, np.array([2]))[0]
+            n_h_CP = scipy.optimize.fsolve(nh_func_CP, np.array([2]))[0]
+            
+            n_h_Wilson = np.ceil(n_h_Wilson)
+            n_h_Wilson = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_Wilson)
+            n_h_AC = np.ceil(n_h_AC)
+            n_h_AC = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_AC)
+            n_h_CP = np.ceil(n_h_CP)
+            n_h_CP = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_CP)
+
+            designEffectHeatmapWilson[i][j] = np.sum(n_h_Wilson) / neff_Wilson
+            designEffectHeatmapAC[i][j] = np.sum(n_h_AC) / neff_AC
+            designEffectHeatmapCP[i][j] = np.sum(n_h_CP) / neff_CP
+
+            # ########################## #
+            # Get pixel sample locations #
+            # ########################## #
+            
+            for l in tqdm.tqdm(range(numSamples), leave=False):
+                
+                ##########
+                # Wilson #
+                ##########
+
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_Wilson[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                x = neff_Wilson * p_st
+                lowerCL = ((x + z**2/2)/(neff_Wilson+z**2)) - (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+                upperCL = ((x + z**2/2)/(neff_Wilson+z**2)) + (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+
+                if float(keyValues[10000*i + j][2])/100 < upperCL and float(keyValues[10000*i + j][2])/100 > lowerCL:
+                    coverageSuccessesWilson += 1
+                
+                widthsWilson.append((upperCL-lowerCL)/2)
+
+                ##########
+                #   AC   #
+                ##########
+
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_AC[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                x = neff_AC * p_st
+                lowerCL = ((x + z**2/2)/(neff_AC+z**2)) - (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
+                upperCL = ((x + z**2/2)/(neff_AC+z**2)) + (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
+
+                if float(keyValues[10000*i + j][2])/100 < upperCL and float(keyValues[10000*i + j][2])/100 > lowerCL:
+                    coverageSuccessesAC += 1
+                
+                widthsAC.append((upperCL-lowerCL)/2)
+
+
+                ##########
+                #   CP   #
+                ##########
+
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_CP[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                lowerCL, upperCL = scipy.stats.binom.interval(confidence, neff_CP, p_st) # NOTE: Scipy interval returns number of successes
+                lowerCL /= neff_CP
+                upperCL /= neff_CP
+
+                if float(keyValues[10000*i + j][2])/100 < upperCL and float(keyValues[10000*i + j][2])/100 > lowerCL:
+                    coverageSuccessesCP += 1
+                
+                widthsCP.append((upperCL-lowerCL)/2)
+                
+            coverageHeatmapWilson[i][j] = 100 * coverageSuccessesWilson / numSamples
+            widthHeatmapWilson[i][j] = 100 * np.average(widthsWilson)
+
+            coverageHeatmapAC[i][j] = 100 * coverageSuccessesAC / numSamples
+            widthHeatmapAC[i][j] = 100 * np.average(widthsAC)
+
+            coverageHeatmapCP[i][j] = 100 * coverageSuccessesCP / numSamples
+            widthHeatmapCP[i][j] = 100 * np.average(widthsCP)
+        
+        startIndex += 10000
+
+    with open("Sim1output1MOE.csv", "w") as csvFile:
+        writer = csv.writer(csvFile)
+        writer.writerows(coverageHeatmapWilson)
+        writer.writerows(widthHeatmapWilson)
+        writer.writerows(coverageHeatmapAC)
+        writer.writerows(widthHeatmapAC)
+        writer.writerows(coverageHeatmapCP)
+        writer.writerows(widthHeatmapCP)
+
+    ax = sns.heatmap(coverageHeatmapWilson,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=95, xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(widthHeatmapWilson,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=int(MOE*100), xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(coverageHeatmapAC,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=95, xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(widthHeatmapAC,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=int(MOE*100), xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(coverageHeatmapCP,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=95, xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+    ax = sns.heatmap(widthHeatmapCP,annot=True, fmt=".1f", linewidth=0.5, linecolor="k", cmap="icefire", center=int(MOE*100), xticklabels=np.arange(1,numImages+1))
+    ax.set(xlabel="Image Number", ylabel="Image Parameter Group Number")
+    plt.yticks(rotation=0)
+    plt.show()
+
+def AutoAnalyzeSimImages():
+    dir = "TestCases"
+    files = os.listdir(dir)
+    files.sort()
+
+    numStrata_N = 4
+    MOE = 0.01
+    confidence = 0.95
+
+    guessValues = np.array([0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95])
+
+    useWilson = True
+    useAC = True
+    useCP = True
+
+    keyValues = []
+    with open("key.csv", "r") as keyFile:
+        reader = csv.reader(keyFile)
+        for line in reader:
+            temp = [line[0], line[1], line[2], line[3], line[4]]
+            keyValues.append(temp)
+
+    with open(f"SimOutput_{int(confidence*100)}CI_{int(MOE*100)}MOE_{numStrata_N}x{numStrata_N}.csv", 'a', newline='') as csvFile:
+        writer = csv.writer(csvFile)
+        for iternum in tqdm.tqdm(range(len((files)))):
+            originalImage = io.imread(os.path.join(dir,files[iternum]), as_gray=True)
+            myMap = PixelMap(originalImage)
+
+            N = myMap.numPixels
+            N_h = int(N / numStrata_N**2)
+            W_h = N_h/N
+
+            initialGuesses = []
+
+            for i in range(numStrata_N):
+                topBound = int(i * myMap.rows / numStrata_N)
+                bottomBound = int((i+1) * myMap.rows/numStrata_N)
+                for j in range(numStrata_N):
+                    leftBound = int(j * myMap.cols / numStrata_N)
+                    rightBound = int((j+1) * myMap.cols / numStrata_N)
+
+                    selectedArea = myMap.originalImage[leftBound:rightBound+1, topBound:bottomBound+1]
+
+                    numPorePixels = np.sum(np.where(selectedArea != 255, 1, 0))
+
+                    porosity = numPorePixels / ((rightBound - leftBound) * (bottomBound - topBound))
+
+                    closestGuess = guessValues[np.argmin(np.abs(porosity - guessValues))]
+
+                    initialGuesses.append(closestGuess)
+            
+            initialGuesses = np.array(initialGuesses)
+            p_st = np.sum(W_h * initialGuesses)
+            q_st = 1 - p_st
+            z = scipy.stats.norm.ppf(confidence)
+            
+            neff_func_Wilson = lambda x: MOE - (z * np.sqrt(x) / ((x+z**2)) * (p_st * (1-p_st) + (z**2 / (4*x)))**0.5)
+            neff_func_AC = lambda x: MOE - (z * np.sqrt((p_st * (1-p_st)) / (x + z**2)))
+            neff_func_CP = lambda x: MOE - ((scipy.stats.binom.interval(0.95, x, p_st)[1]/x - scipy.stats.binom.interval(0.95, x, p_st)[0]/x) / 2)
+
+            # NOTE: neff values are rounded to ensure equal allocation is possible
+            neff_Wilson = scipy.optimize.fsolve(neff_func_Wilson, np.array([numStrata_N**2]))[0]
+            neff_Wilson = np.ceil(neff_Wilson / numStrata_N**2) * numStrata_N**2
+            neff_AC = scipy.optimize.fsolve(neff_func_AC, np.array([numStrata_N**2]))[0]
+            neff_AC = np.ceil(neff_AC / numStrata_N**2) * numStrata_N**2
+            # NOTE: scipy CP interval reports expected number of successes
+            # NOTE: scipy fsolve does not work for this, using alternative lookup table method
+            testVals = np.arange(1,10000)
+            CP_return_vals = neff_func_CP(testVals)
+            neff_CP = testVals[np.argmin(np.abs(CP_return_vals))]
+            neff_CP = np.ceil(neff_CP/ numStrata_N**2) * numStrata_N**2
+
+            nh_func_Wilson = lambda x: neff_Wilson - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_AC  = lambda x: neff_AC - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            nh_func_CP = lambda x: neff_CP - ((p_st * q_st) / np.sum((W_h**2 * initialGuesses * (1-initialGuesses)) / (x - 1)))
+            
+            n_h_Wilson = scipy.optimize.fsolve(nh_func_Wilson, np.array([2]))[0]
+            n_h_AC = scipy.optimize.fsolve(nh_func_AC, np.array([2]))[0]
+            n_h_CP = scipy.optimize.fsolve(nh_func_CP, np.array([2]))[0]
+            
+            n_h_Wilson = np.ceil(n_h_Wilson)
+            n_h_Wilson = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_Wilson)
+            n_h_AC = np.ceil(n_h_AC)
+            n_h_AC = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_AC)
+            n_h_CP = np.ceil(n_h_CP)
+            n_h_CP = np.ones(numStrata_N**2, dtype=np.int16) * int(n_h_CP)
+
+            csvRow = keyValues[iternum]
+            
+            # ########################## #
+            # Get pixel sample locations #
+            # ########################## #
+            
+            ##########
+            # Wilson #
+            ##########
+
+            if useWilson:
+
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_Wilson[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                x = neff_Wilson * p_st
+                lowerCL = ((x + z**2/2)/(neff_Wilson+z**2)) - (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+                upperCL = ((x + z**2/2)/(neff_Wilson+z**2)) + (z * np.sqrt(neff_Wilson) / ((neff_Wilson+z**2)) * (p_st * (1-p_st) + (z**2 / (4*neff_Wilson)))**0.5)
+
+                csvRow.extend([p_st,lowerCL,upperCL])
+            
+            ##########
+            #   AC   #
+            ##########
+
+            if useAC:
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_AC[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+
+                p_st = np.sum(p_h * W_h)
+                x = neff_AC * p_st
+                lowerCL = ((x + z**2/2)/(neff_AC+z**2)) - (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
+                upperCL = ((x + z**2/2)/(neff_AC+z**2)) + (z * np.sqrt((p_st * (1-p_st)) / (neff_AC + z**2)))
+
+                csvRow.extend([p_st,lowerCL,upperCL])
+
+
+            ##########
+            #   CP   #
+            ##########
+
+            if useCP:
+                p_h = []
+                cnt = 0
+                for i2 in range(numStrata_N):
+                    topBound = int(i2*myMap.rows/numStrata_N)
+                    bottomBound = int((i2+1)*myMap.rows/numStrata_N)
+                    for j2 in range(numStrata_N):
+                        leftBound = int(j2*myMap.cols/numStrata_N)
+                        rightBound = int((j2+1)*myMap.cols/numStrata_N)
+
+                        random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h_CP[cnt], replace=False)
+                        random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                        random[0,:] += topBound
+                        random[1,:] += leftBound
+
+                        pixels = list(zip(random[0,:], random[1,:]))
+                        k = 0
+                        for pixel in pixels:
+                            if myMap.originalImage[pixel] != 255:
+                                k += 1
+                        
+                        p_h.append(k / len(pixels))
+
+                        cnt += 1
+                
+                p_h = np.array(p_h)
+                p_st = np.sum(p_h * W_h)
+                lowerCL, upperCL = scipy.stats.binom.interval(confidence, neff_CP, p_st) # NOTE: Scipy interval returns number of successes
+                lowerCL /= neff_CP
+                upperCL /= neff_CP
+
+                csvRow.extend([p_st,lowerCL,upperCL])
+
+            writer.writerow(csvRow)
+            csvFile.flush()
+
+
+# CompareTimes()
+# PlotSimResultsStrata()
 PlotSimResults()
