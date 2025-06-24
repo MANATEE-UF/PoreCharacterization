@@ -4,7 +4,6 @@ import scipy.optimize
 from skimage import io
 from skimage.color import gray2rgb
 import matplotlib
-import matplotlib.path
 matplotlib.use("Qt5Agg")
 from PyQt5 import QtWidgets, QtGui, QtCore
 import sys
@@ -34,6 +33,8 @@ class PixelMap:
         
         if len(np.shape(self.originalImage)) == 3 and np.shape(self.originalImage)[2] == 3: # image is rgb
             displayImage = np.copy(self.originalImage)
+        elif len(np.shape(self.originalImage)) == 3 and np.shape(self.originalImage)[2] == 4: # image is rgba
+            displayImage = np.copy(self.originalImage[:,:,:3])
         else: # image is grayscale
             displayImage = gray2rgb(self.originalImage)
         
@@ -626,7 +627,7 @@ class InitialGuessWidget(QtWidgets.QWidget):
 
             image = self.myMap.GetCroppedImage(leftBound, rightBound, topBound, bottomBound)   
         
-        # FIXME: Write this
+        # countAreaBounds is [center_x, center_y, radius]
         elif self.countAreaType == "Circular":
             # Square box around circle
             topBound = self.countAreaBounds[1] - self.countAreaBounds[2] 
@@ -638,55 +639,120 @@ class InitialGuessWidget(QtWidgets.QWidget):
             strataFraction = self.strataIndex / self.numStrata
             if strataFraction < 0.25:
                 leftBound = self.countAreaBounds[0]
-                bottomBound = self.countAreaBounds[1]
+                topBound = self.countAreaBounds[1]
             elif strataFraction < 0.5:
                 rightBound = self.countAreaBounds[0]
-                bottomBound = self.countAreaBounds[1]
+                topBound = self.countAreaBounds[1]
             elif strataFraction < 0.75:
                 rightBound = self.countAreaBounds[0]
-                topBound = self.countAreaBounds[1]
+                bottomBound = self.countAreaBounds[1]
             else:
                 leftBound = self.countAreaBounds[0]
-                topBound = self.countAreaBounds[1]
+                bottomBound = self.countAreaBounds[1]
             
             # find points along radius that divide circle into strata
-            thetas = np.linspace(0,2*np.pi, self.numStrata)
-
-            # further subdivide arc 
-            fineThetas = np.linspace(thetas[self.strataIndex], thetas[self.strataIndex+1], 10)
-
-            # store polygon points
-            polygon = [(self.countAreaBounds[0], self.countAreaBounds[1])]
-            for theta in fineThetas:
-                x = int(self.countAreaBounds[2] * np.cos(theta) + self.countAreaBounds[0])
-                y = int(self.countAreaBounds[2] * np.sin(theta) + self.countAreaBounds[1])
-
-                polygon.append((x,y)) 
+            thetas = np.linspace(0,2*np.pi, self.numStrata+1)
             
-            # TODO: Implement some algorithm to find if points are within polygon
+            image = self.myMap.originalImage
+            # Example parameters
+            height, width = len(image), len(image[0])
+            center = (self.countAreaBounds[0], self.countAreaBounds[1])
+            radius = self.countAreaBounds[2]
+            theta1 = thetas[self.strataIndex]   # Start angle in radians
+            theta2 = thetas[self.strataIndex+1]  # End angle in radians
+
+            # Create a blank mask
+            mask = np.zeros((height, width), dtype=np.uint8)
+
+            # Generate points along the arc
+            num_points = 50
+            thetas = np.linspace(theta1, theta2, num_points)
+            arc_points = np.array([
+                (
+                    int(center[0] + radius * np.cos(theta)),
+                    int(center[1] + radius * np.sin(theta))
+                )
+                for theta in thetas
+            ])
+            
+            # Combine center and arc points to form the sector polygon
+            polygon = np.vstack([center, arc_points, center])
+
+            # Draw the filled polygon on the mask
+            cv2.fillPoly(mask, [polygon], 255)
+
+            # Apply mask to image (assuming grayscale)
+            masked_image = cv2.bitwise_and(image, image, mask=mask)
+            image = masked_image[topBound:bottomBound, leftBound:rightBound]
               
-        # FIXME: Write this
         elif self.countAreaType == "Annular":
-            # Square box around circle
-            topBound = self.countAreaBounds[1] - self.countAreaBounds[3] 
-            bottomBound = self.countAreaBounds[1] + self.countAreaBounds[3]
-            leftBound = self.countAreaBounds[0] - self.countAreaBounds[3]
-            rightBound = self.countAreaBounds[0] + self.countAreaBounds[3]
+            # Annular sector mask
+            # countAreaBounds: [center_x, center_y, inner_radius, outer_radius]
+            center_x, center_y, inner_radius, outer_radius = self.countAreaBounds
+
+            # Bounds for cropping (outer square)
+            topBound = int(center_y - outer_radius)
+            bottomBound = int(center_y + outer_radius)
+            leftBound = int(center_x - outer_radius)
+            rightBound = int(center_x + outer_radius)
 
             # Divide square into appropriate quarter
             strataFraction = self.strataIndex / self.numStrata
             if strataFraction < 0.25:
                 leftBound = self.countAreaBounds[0]
-                bottomBound = self.countAreaBounds[1]
+                topBound = self.countAreaBounds[1]
             elif strataFraction < 0.5:
                 rightBound = self.countAreaBounds[0]
-                bottomBound = self.countAreaBounds[1]
+                topBound = self.countAreaBounds[1]
             elif strataFraction < 0.75:
                 rightBound = self.countAreaBounds[0]
-                topBound = self.countAreaBounds[1]
+                bottomBound = self.countAreaBounds[1]
             else:
                 leftBound = self.countAreaBounds[0]
-                topBound = self.countAreaBounds[1]
+                bottomBound = self.countAreaBounds[1]
+
+            # Angles for this stratum
+            thetas = np.linspace(0, 2 * np.pi, self.numStrata + 1)
+            theta1 = thetas[self.strataIndex]
+            theta2 = thetas[self.strataIndex + 1]
+
+            # Create mask
+            image = self.myMap.originalImage
+            height, width = image.shape[:2]
+            mask = np.zeros((height, width), dtype=np.uint8)
+
+            # Outer arc points
+            num_points = 50
+            arc_outer = np.array([
+                (
+                    int(center_x + outer_radius * np.cos(theta)),
+                    int(center_y + outer_radius * np.sin(theta))
+                )
+                for theta in np.linspace(theta1, theta2, num_points)
+            ])
+            # Inner arc points (reverse order)
+            arc_inner = np.array([
+                (
+                    int(center_x + inner_radius * np.cos(theta)),
+                    int(center_y + inner_radius * np.sin(theta))
+                )
+                for theta in np.linspace(theta2, theta1, num_points)
+            ])
+
+            # Combine to form annular sector polygon
+            polygon = np.vstack([arc_outer, arc_inner])
+
+            # Draw filled polygon on mask
+            cv2.fillPoly(mask, [polygon], 255)
+
+            # Apply mask to image (handles grayscale or RGB)
+            if image.ndim == 2:
+                masked_image = cv2.bitwise_and(image, image, mask=mask)
+            else:
+                masked_image = cv2.bitwise_and(image, image, mask=mask)
+
+            # Crop to bounding box
+            image = masked_image[topBound:bottomBound, leftBound:rightBound]
 
 
         self.sc.axes.cla()
@@ -768,16 +834,17 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         self.e_moe = 0.01
         self.d = 0.9
 
-    # TODO: Implement countAreaBounds and type for different geometries
-    def InitializeCounting(self, initialGuesses, imagePath, countAreaBounds, countAreaType, confidence, MOE):
+    def InitializeCounting(self, initialGuesses, imagePath, countAreaType, countAreaBounds, confidence, MOE):
 
-        self.numStrata_N = int(np.sqrt(len(initialGuesses)))
+        self.numStrata = len(initialGuesses)
         self.imageName = imagePath
         image = io.imread(imagePath)
         self.myMap = PixelMap(image)
         self.N = self.myMap.numPixels
-        self.N_h = int(self.N / self.numStrata_N**2)
+        self.N_h = int(self.N / self.numStrata)
         self.confidence = confidence
+        self.strataIndex = 0
+        self.sampleIndex = 0
         
         W_h = self.N_h / self.N
 
@@ -796,8 +863,6 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         
         p_st = np.sum(W_h * initialGuesses)
         q_st = 1 - p_st
-        
-        z = scipy.stats.norm.ppf(confidence)
 
         neff_func = lambda x: MOE - ((scipy.stats.binom.interval(0.95, x, p_st)[1]/x - scipy.stats.binom.interval(0.95, x, p_st)[0]/x) / 2)
 
@@ -807,7 +872,7 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         return_vals = neff_func(testVals)
 
         neff = testVals[np.argmin(np.abs(return_vals))]
-        neff = np.ceil(neff/ self.numStrata_N**2) * self.numStrata_N**2
+        neff = np.ceil(neff/ self.numStrata) * self.numStrata
 
         self.neff = neff
 
@@ -816,31 +881,143 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         n_h = scipy.optimize.fsolve(nh_func, np.array([2]))[0]
         
         n_h = np.ceil(n_h)
-        n_h = np.ones(self.numStrata_N**2, dtype=np.int16) * int(n_h)
+        n_h = np.ones(self.numStrata, dtype=np.int16) * int(n_h)
 
         self.n_h = n_h
 
         # ########################## #
         # Get pixel sample locations #
         # ########################## #
-
         pixels = []
-        cnt = 0
-        for i in range(self.numStrata_N):
-            topBound = int(i*self.myMap.rows/self.numStrata_N)
-            bottomBound = int((i+1)*self.myMap.rows/self.numStrata_N)
-            for j in range(self.numStrata_N):
-                leftBound = int(j*self.myMap.cols/self.numStrata_N)
-                rightBound = int((j+1)*self.myMap.cols/self.numStrata_N)
 
-                random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h[cnt], replace=False)
+        if countAreaType == "Full":
+
+            numStrata_N = int(np.sqrt(self.numStrata))
+
+            for i in range(self.numStrata):
+                unraveledStrataIndex = np.unravel_index(i, (numStrata_N, numStrata_N))
+                row = unraveledStrataIndex[0]
+                col = unraveledStrataIndex[1]
+
+                topBound = int(row*self.myMap.rows/numStrata_N)
+                bottomBound = int((row+1)*self.myMap.rows/numStrata_N)
+
+                leftBound = int(col*self.myMap.cols/numStrata_N)
+                rightBound = int((col+1)*self.myMap.cols/numStrata_N)
+
+                random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h[i], replace=False)
+                random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
+                random[0,:] += topBound
+                random[1,:] += leftBound
+            
+                pixels.append(list(zip(random[0,:], random[1,:])))
+
+        elif countAreaType == "Rectangular":
+
+            numStrata_N = int(np.sqrt(self.numStrata))
+            
+            for i in range(self.numStrata):
+                unraveledStrataIndex = np.unravel_index(i, (numStrata_N, numStrata_N))
+                row = unraveledStrataIndex[0]
+                col = unraveledStrataIndex[1]
+
+                topBound = int(countAreaBounds[1] + (row / numStrata_N) * countAreaBounds[3])
+                bottomBound = int(countAreaBounds[1] + ((row+1) / numStrata_N) * countAreaBounds[3])
+                leftBound = int(countAreaBounds[0] + (col / numStrata_N) * countAreaBounds[2])
+                rightBound = int(countAreaBounds[0] + ((col+1) / numStrata_N) * countAreaBounds[2])
+
+                random = np.random.choice(np.arange(0,((bottomBound-topBound) * (rightBound-leftBound))), n_h[i], replace=False)
                 random = np.array(np.unravel_index(random, (bottomBound-topBound,rightBound-leftBound)))
                 random[0,:] += topBound
                 random[1,:] += leftBound
         
                 pixels.append(list(zip(random[0,:], random[1,:])))
 
-                cnt += 1
+        elif countAreaType == "Circular":          
+            # find points along radius that divide circle into strata
+            thetas = np.linspace(0,2*np.pi, self.numStrata+1)
+            
+            image = self.myMap.originalImage
+            # Example parameters
+            height, width = len(image), len(image[0])
+            center = (countAreaBounds[0], countAreaBounds[1])
+            radius = countAreaBounds[2]
+
+            for i in range(self.numStrata):
+                theta1 = thetas[i]   # Start angle in radians
+                theta2 = thetas[i+1]  # End angle in radians
+
+                # Create a blank mask
+                mask = np.zeros((height, width), dtype=np.uint8)
+
+                # Generate points along the arc
+                num_points = 50
+                arc_thetas = np.linspace(theta1, theta2, num_points)
+                arc_points = np.array([
+                    (
+                        int(center[0] + radius * np.cos(theta)),
+                        int(center[1] + radius * np.sin(theta))
+                    )
+                    for theta in arc_thetas
+                ])
+                
+                # Combine center and arc points to form the sector polygon
+                polygon = np.vstack([center, arc_points, center])
+
+                # Draw the filled polygon on the mask
+                cv2.fillPoly(mask, [polygon], 255)
+
+                # Randomly sample points within the masked area
+                ys, xs = np.where(mask == 255)
+                if len(xs) < n_h[i]:
+                    raise ValueError(f"Not enough pixels in stratum {i} to sample {n_h[i]} points.")
+                idx = np.random.choice(len(xs), n_h[i], replace=False)
+                sampled_points = list(zip(ys[idx], xs[idx]))
+                pixels.append(list(sampled_points))
+
+        elif countAreaType == "Annular":
+            center_x, center_y, inner_radius, outer_radius = countAreaBounds
+            height, width = self.myMap.originalImage.shape[:2]
+            thetas = np.linspace(0, 2 * np.pi, self.numStrata + 1)
+
+            for i in range(self.numStrata):
+                theta1 = thetas[i]
+                theta2 = thetas[i + 1]
+
+                # Create mask for this annular sector
+                mask = np.zeros((height, width), dtype=np.uint8)
+
+                # Outer arc points
+                num_points = 50
+                arc_outer = np.array([
+                    (
+                        int(center_x + outer_radius * np.cos(theta)),
+                        int(center_y + outer_radius * np.sin(theta))
+                    )
+                    for theta in np.linspace(theta1, theta2, num_points)
+                ])
+                # Inner arc points (reverse order)
+                arc_inner = np.array([
+                    (
+                        int(center_x + inner_radius * np.cos(theta)),
+                        int(center_y + inner_radius * np.sin(theta))
+                    )
+                    for theta in np.linspace(theta2, theta1, num_points)
+                ])
+
+                # Combine to form annular sector polygon
+                polygon = np.vstack([arc_outer, arc_inner])
+
+                # Draw filled polygon on mask
+                cv2.fillPoly(mask, [polygon], 255)
+
+                # Randomly sample points within the masked area
+                ys, xs = np.where(mask == 255)
+                if len(xs) < n_h[i]:
+                    raise ValueError(f"Not enough pixels in annular stratum {i} to sample {n_h[i]} points.")
+                idx = np.random.choice(len(xs), n_h[i], replace=False)
+                sampled_points = list(zip(ys[idx], xs[idx]))
+                pixels.append(list(sampled_points))
         
         self.samplePositions = pixels # First axis is strata axis, second axis is sample axis
         self.numGrids = np.sum(n_h)
@@ -854,7 +1031,7 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
         self.gridIndex = 0 # Used to track flattend index, useful for writing to 1D poreData
 
         self.poreData = np.zeros((self.numGrids))
-        self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
+        self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata}")
 
         self.UpdateDisplay()
 
@@ -965,7 +1142,7 @@ class ConstituentCountingWidget(QtWidgets.QWidget):
 
             return
 
-        self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata_N**2}")
+        self.indexProgressText.setText(f"Sample: {self.sampleIndex+1}/{self.n_h[self.strataIndex]}, Strata: {self.strataIndex+1}/{self.numStrata}")
 
         self.UpdateDisplay()
 
