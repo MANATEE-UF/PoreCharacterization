@@ -230,14 +230,26 @@ class SetupWidget(QtWidgets.QWidget):
 
         img = cv2.imread(self.imagePathBox.text())
 
+        screen = QtWidgets.QApplication.primaryScreen()
+        screen_size = screen.size()
+        max_width = int(screen_size.width() * 0.9)
+        max_height = int(screen_size.height() * 0.9)
+        
+        img_disp = img.copy()
+        h, w = img_disp.shape[:2]
+        scale = min(max_width / w, max_height / h, 1.0)
+        if scale < 1.0:
+            img_disp = cv2.resize(img_disp, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
         # top left x, top left y, width, height
-        self.countAreaBounds = cv2.selectROI("Select a ROI and then press ENTER button", img)
+        self.countAreaBounds = cv2.selectROI("Select a ROI and then press ENTER button", img_disp)
         cv2.destroyWindow('Select a ROI and then press ENTER button')
 
         if self.countAreaBounds[2] == 0 and self.countAreaBounds[3] == 0:
             self.step2Number.setStyleSheet("border: 3px solid black; background-color; font: bold 24px")
             self.selectRectCropButton.setChecked(False)
         else:
+            self.countAreaBounds = [int(n/scale) for n in self.countAreaBounds]  # Convert to original image coordinates
             self.step2Number.setStyleSheet("border: 3px solid black; background-color: lightgreen; font: bold 24px")
 
     def CircularCrop(self):
@@ -248,48 +260,67 @@ class SetupWidget(QtWidgets.QWidget):
 
         coords = [None, None, None]
         img = cv2.imread(self.imagePathBox.text())
+        lineThickness = 3 # Set line thickness based on image size
+
+        screen = QtWidgets.QApplication.primaryScreen()
+        screen_size = screen.size()
+        max_width = int(screen_size.width() * 0.9)
+        max_height = int(screen_size.height() * 0.9)
+        
+        img_disp = img.copy()
+        h, w = img_disp.shape[:2]
+        scale = min(max_width / w, max_height / h, 1.0)
+        if scale < 1.0:
+            img_disp = cv2.resize(img_disp, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
         # mouse callback function
         def draw_circle(event,x,y,flags,param):      
             if event == cv2.EVENT_LBUTTONUP:
                 if param[0] is None:
-                    param[0] = x
-                    param[1] = y
-                    cv2.circle(img,(x,y), 5, (0,0,255), -1)
+                    param[0] = int(x / scale)
+                    param[1] = int(y / scale)
+                    cv2.circle(img_disp, (x, y), 5, (0, 0, 255), -1)
                 elif param[2] is None:
-                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                    # Convert display coordinates to original image coordinates
+                    x_orig = int(x / scale)
+                    y_orig = int(y / scale)
+                    center_x_orig = param[0]
+                    center_y_orig = param[1]
+                    radius_orig = int(np.sqrt((center_x_orig - x_orig) ** 2 + (center_y_orig - y_orig) ** 2))
+                    radius_disp = int(radius_orig * scale)
+
+                    if center_x_orig + radius_orig > img.shape[1] or center_x_orig - radius_orig < 0:
                         msg = QtWidgets.QMessageBox()
                         msg.setIcon(QtWidgets.QMessageBox.Critical)
                         msg.setText("Error")
                         msg.setInformativeText('Circle extends beyond image bounds.')
                         msg.setWindowTitle("Error")
                         msg.exec_()
-                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                    elif center_y_orig + radius_orig > img.shape[0] or center_y_orig - radius_orig < 0:
                         msg = QtWidgets.QMessageBox()
                         msg.setIcon(QtWidgets.QMessageBox.Critical)
                         msg.setText("Error")
                         msg.setInformativeText('Circle extends beyond image bounds.')
                         msg.setWindowTitle("Error")
                         msg.exec_()
+
                     else:
-                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
+                        param[2] = radius_orig
+                        cv2.circle(img_disp, (int(param[0]*scale), int(param[1]*scale)), radius_disp, (0, 0, 255), lineThickness)
 
                         # find points along radius that divide circle into 16 strata
-                        thetas = np.linspace(0,2*np.pi, 17)
+                        thetas = np.linspace(0, 2 * np.pi, 17)
                         for theta in thetas:
-                            endPointX = int(param[2] * np.cos(theta))
-                            endPointY = int(param[2] * np.sin(theta))
-                            endPointX += param[0]
-                            endPointY += param[1]
-                            cv2.line(img, (param[0], param[1]), (endPointX, endPointY), (0, 0, 255), 2)
-        
+                            endPointX_disp = int(param[0] + radius_disp * np.cos(theta))
+                            endPointY_disp = int(param[1] + radius_disp * np.sin(theta))
+                            cv2.line(img_disp, (param[0], param[1]), (endPointX_disp, endPointY_disp), (0, 0, 255), lineThickness)
+            
         cv2.namedWindow('image')
         cv2.setMouseCallback('image',draw_circle, param=coords)
 
         while(1):
-            cv2.imshow('image',img)
+            # Resize the image to fit the screen before displaying
+            cv2.imshow('image', img_disp)
             k = cv2.waitKey(1) & 0xFF
             if k == 10 or k == 13 or k == ord("q"):
                 break
@@ -310,24 +341,41 @@ class SetupWidget(QtWidgets.QWidget):
 
         coords = [None, None, None, None]
         img = cv2.imread(self.imagePathBox.text())
+        lineThickness = 3
+
+        screen = QtWidgets.QApplication.primaryScreen()
+        screen_size = screen.size()
+        max_width = int(screen_size.width() * 0.9)
+        max_height = int(screen_size.height() * 0.9)
+        
+        img_disp = img.copy()
+        h, w = img_disp.shape[:2]
+        scale = min(max_width / w, max_height / h, 1.0)
+        if scale < 1.0:
+            img_disp = cv2.resize(img_disp, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
         # mouse callback function
         def draw_circle(event,x,y,flags,param):      
             if event == cv2.EVENT_LBUTTONUP:
                 if param[0] is None:
-                    param[0] = x
-                    param[1] = y
-                    cv2.circle(img,(x,y), 5, (0,0,255), -1)
+                    param[0] = int(x/scale)
+                    param[1] = int(y/scale)
+                    cv2.circle(img_disp,(x,y), 5, (0,0,255), -1)
                 elif param[2] is None:
-                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                    x_orig = int(x / scale)
+                    y_orig = int(y / scale)
+                    center_x_orig = param[0]
+                    center_y_orig = param[1]
+                    radius_orig = int(np.sqrt((center_x_orig - x_orig) ** 2 + (center_y_orig - y_orig) ** 2))
+                    radius_disp = int(radius_orig * scale)
+                    if param[0] + radius_orig > img.shape[1] or param[0] - radius_orig < 0:
                         msg = QtWidgets.QMessageBox()
                         msg.setIcon(QtWidgets.QMessageBox.Critical)
                         msg.setText("Error")
                         msg.setInformativeText('Circle extends beyond image bounds.')
                         msg.setWindowTitle("Error")
                         msg.exec_()
-                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                    elif param[1] + radius_orig > img.shape[0] or param[1] - radius_orig < 0:
                         msg = QtWidgets.QMessageBox()
                         msg.setIcon(QtWidgets.QMessageBox.Critical)
                         msg.setText("Error")
@@ -335,18 +383,23 @@ class SetupWidget(QtWidgets.QWidget):
                         msg.setWindowTitle("Error")
                         msg.exec_()
                     else:
-                        param[2] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                        cv2.circle(img, (param[0], param[1]), param[2], (0, 0, 255), 2)
+                        param[2] = radius_orig
+                        cv2.circle(img_disp, (int(param[0]*scale), int(param[1]*scale)), radius_disp, (0, 0, 255), lineThickness)
                 elif param[3] is None:
-                    radius = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                    if param[0] + radius > img.shape[1] or param[0] - radius < 0:
+                    x_orig = int(x / scale)
+                    y_orig = int(y / scale)
+                    center_x_orig = param[0]
+                    center_y_orig = param[1]
+                    radius_orig = int(np.sqrt((center_x_orig - x_orig) ** 2 + (center_y_orig - y_orig) ** 2))
+                    radius_disp = int(radius_orig * scale)
+                    if param[0] + radius_orig > img.shape[1] or param[0] - radius_orig < 0:
                         msg = QtWidgets.QMessageBox()
                         msg.setIcon(QtWidgets.QMessageBox.Critical)
                         msg.setText("Error")
                         msg.setInformativeText('Circle extends beyond image bounds.')
                         msg.setWindowTitle("Error")
                         msg.exec_()
-                    elif param[1] + radius > img.shape[0] or param[1] - radius < 0:
+                    elif param[1] + radius_orig > img.shape[0] or param[1] - radius_orig < 0:
                         msg = QtWidgets.QMessageBox()
                         msg.setIcon(QtWidgets.QMessageBox.Critical)
                         msg.setText("Error")
@@ -354,27 +407,27 @@ class SetupWidget(QtWidgets.QWidget):
                         msg.setWindowTitle("Error")
                         msg.exec_()
                     else:
-                        param[3] = int(np.sqrt((param[0]-x)**2 + (param[1]-y)**2))
-                        cv2.circle(img, (param[0], param[1]), param[3], (0, 0, 255), 2)
+                        param[3] = radius_orig
+                        cv2.circle(img_disp, (int(param[0]*scale), int(param[1]*scale)), radius_disp, (0, 0, 255), lineThickness)
 
                         # find points along radius that divide circle into 16 strata
                         thetas = np.linspace(0,2*np.pi, 17)
                         for theta in thetas:
-                            startPointX = int(param[2] * np.cos(theta))
-                            startPointY = int(param[2] * np.sin(theta))
-                            startPointX += param[0]
-                            startPointY += param[1]
-                            endPointX = int(param[3] * np.cos(theta))
-                            endPointY = int(param[3] * np.sin(theta))
-                            endPointX += param[0]
-                            endPointY += param[1]
-                            cv2.line(img, (startPointX, startPointY), (endPointX, endPointY), (0, 0, 255), 2)
+                            startPointX = int(param[2] * scale * np.cos(theta))
+                            startPointY = int(param[2] * scale * np.sin(theta))
+                            startPointX += int(param[0] * scale)
+                            startPointY += int(param[1] * scale)
+                            endPointX = int(param[3] * scale * np.cos(theta))
+                            endPointY = int(param[3] * scale * np.sin(theta))
+                            endPointX += int(param[0] * scale)
+                            endPointY += int(param[1] * scale)
+                            cv2.line(img_disp, (startPointX, startPointY), (endPointX, endPointY), (0, 0, 255), lineThickness)
         
         cv2.namedWindow('image')
         cv2.setMouseCallback('image',draw_circle, param=coords)
 
         while(1):
-            cv2.imshow('image',img)
+            cv2.imshow('image',img_disp)
             k = cv2.waitKey(1) & 0xFF
             if k == 10 or k == 13 or k == ord("q"):
                 break
